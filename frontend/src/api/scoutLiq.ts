@@ -490,11 +490,17 @@ export interface AffiliationRow {
   iso_year: number | null
   iso_week: number | null
   iso_week_label: string
+  iso_week_start?: string
+  iso_week_end?: string
+  iso_week_label_full?: string
   hire_date: string | null
   origin: string | null
   driver_id: string | null
   driver_license_raw: string | null
   driver_name_raw: string | null
+  driver_display_name?: string
+  driver_apellido?: string
+  driver_nombre?: string
   scout_id: number | null
   scout_name: string | null
   supervisor_id: number | null
@@ -509,6 +515,7 @@ export interface AffiliationRow {
   payment_financial_status: string | null
   payment_blocking_status: string | null
   blocks_future_payment: boolean | null
+  blocking_display?: string
   paid_history_id: number | null
   amount_paid: number | null
   currency: string | null
@@ -526,15 +533,20 @@ export interface AffiliationsResponse {
 }
 
 export interface OperationFilters {
+  current_iso_week: string
+  current_iso_week_label: string
+  has_data_for_current_week: boolean
+  latest_iso_week_with_data: string | null
+  latest_iso_week_with_data_label: string | null
+  default_week_iso: string
   weeks: { year: number; week: number; label: string }[]
   scouts: { id: number; name: string }[]
   origins: string[]
   alert_types: { value: string; label: string }[]
-  final_statuses: string[]
 }
 
-export async function getOperationSummary(): Promise<OperationSummary> {
-  const { data } = await api.get('/operation/summary')
+export async function getOperationSummary(params?: Record<string, any>): Promise<OperationSummary> {
+  const { data } = await api.get('/operation/summary', { params })
   return data
 }
 
@@ -894,5 +906,108 @@ export function getAttributionErrorsUrl(batchId: number): string {
 
 export async function listAttributionBatches(): Promise<any[]> {
   const { data } = await api.get('/attributions/imports')
+  return data
+}
+
+// ── Dashboard ──
+
+export interface DashboardOverview {
+  scope_label: string
+  total_affiliations: number
+  total_with_driver: number
+  total_without_driver: number
+  total_with_scout: number
+  total_without_scout: number
+  total_manual_review: number
+  paid_history_count: number
+  paid_history_amount: number
+  blocking_count: number
+  blocking_amount: number
+  financial_only_count: number
+  financial_only_amount: number
+  blocks_true_without_driver_count: number
+  duplicate_hash_count: number
+  active_scouts: number
+  scouts_with_payments: number
+  scouts_with_manual_review: number
+  pending_cutoff_warning: boolean
+}
+
+export interface ScoutRanking {
+  scout_id: number
+  scout_name: string
+  supervisor_name: string | null
+  affiliations_total: number
+  with_driver: number
+  without_driver: number
+  manual_review: number
+  paid_history_count: number
+  paid_history_amount: number
+  blocking_count: number
+  financial_only_count: number
+  avg_amount_per_paid_driver: number
+  alert_level: string
+}
+
+export interface WeekEvolution {
+  iso_year: number
+  iso_week: number
+  label: string
+  total: number
+  paid_count: number
+  paid_amount: number
+  blocking_count: number
+  financial_only_count: number
+  manual_review: number
+  with_driver: number
+  without_driver: number
+}
+
+export interface QualityFunnel {
+  status: string
+  message?: string
+  cutoff_run_id?: number
+  total_affiliations?: number
+  drivers_1plus_0_7?: number
+  drivers_5plus_0_7?: number
+  drivers_1plus_8_14?: number
+  drivers_5plus_0_14?: number
+  conversion_5v_7d?: number
+  avg_conversion_rate?: number
+}
+
+export interface DashboardAlerts {
+  manual_review_count: number
+  without_driver_count: number
+  without_scout_count: number
+  financial_only_count: number
+  blocks_true_without_driver_count: number
+  duplicate_hash_count: number
+  supervisor_missing_count: number
+  cutoff_pending: boolean
+}
+
+export async function getDashboardOverview(params?: Record<string, any>): Promise<DashboardOverview> {
+  const { data } = await api.get('/dashboard/overview', { params })
+  return data
+}
+
+export async function getDashboardByScout(params?: Record<string, any>): Promise<ScoutRanking[]> {
+  const { data } = await api.get('/dashboard/by-scout', { params })
+  return data
+}
+
+export async function getDashboardByWeek(params?: Record<string, any>): Promise<WeekEvolution[]> {
+  const { data } = await api.get('/dashboard/by-week', { params })
+  return data
+}
+
+export async function getDashboardQualityFunnel(params?: Record<string, any>): Promise<QualityFunnel> {
+  const { data } = await api.get('/dashboard/quality-funnel', { params })
+  return data
+}
+
+export async function getDashboardAlerts(params?: Record<string, any>): Promise<DashboardAlerts> {
+  const { data } = await api.get('/dashboard/alerts', { params })
   return data
 }

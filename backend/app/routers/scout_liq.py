@@ -80,6 +80,10 @@ from app.services.operation_service import (
     get_affiliations, get_affiliation_detail, get_operation_summary,
     get_operation_filters, export_affiliations_csv,
 )
+from app.services.dashboard_service import (
+    get_dashboard_overview, get_dashboard_by_scout, get_dashboard_by_week,
+    get_dashboard_quality_funnel, get_dashboard_alerts,
+)
 from app.schemas.scout_liq import (
     ScoutCreate,
     ScoutUpdate,
@@ -2018,3 +2022,72 @@ def operation_export(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=afiliaciones.csv"},
     )
+
+
+# ═══════════════════════════════════════════════════════════
+# DASHBOARD — KPIs ejecutivos
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/dashboard/overview")
+def dashboard_overview(
+    week_iso: Optional[str] = None,
+    scout_id: Optional[int] = None,
+    supervisor_id: Optional[int] = None,
+    origin: Optional[str] = None,
+    hire_date_from: Optional[str] = None,
+    hire_date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    f = {k: v for k, v in {
+        "week_iso": week_iso, "scout_id": scout_id,
+        "supervisor_id": supervisor_id, "origin": origin,
+        "hire_date_from": hire_date_from, "hire_date_to": hire_date_to,
+    }.items() if v}
+    return get_dashboard_overview(db, **f)
+
+
+@router.get("/dashboard/by-scout")
+def dashboard_by_scout(
+    week_iso: Optional[str] = None,
+    scout_id: Optional[int] = None,
+    origin: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    f = {k: v for k, v in {
+        "week_iso": week_iso, "scout_id": scout_id, "origin": origin,
+    }.items() if v}
+    return get_dashboard_by_scout(db, **f)
+
+
+@router.get("/dashboard/by-week")
+def dashboard_by_week(
+    scout_id: Optional[int] = None,
+    origin: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    f = {k: v for k, v in {
+        "scout_id": scout_id, "origin": origin,
+    }.items() if v}
+    return get_dashboard_by_week(db, **f)
+
+
+@router.get("/dashboard/quality-funnel")
+def dashboard_quality_funnel(
+    week_iso: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    f = {"week_iso": week_iso} if week_iso else {}
+    return get_dashboard_quality_funnel(db, **f)
+
+
+@router.get("/dashboard/alerts")
+def dashboard_alerts(
+    week_iso: Optional[str] = None,
+    scout_id: Optional[int] = None,
+    origin: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    f = {k: v for k, v in {
+        "week_iso": week_iso, "scout_id": scout_id, "origin": origin,
+    }.items() if v}
+    return get_dashboard_alerts(db, **f)
