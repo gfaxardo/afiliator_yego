@@ -1,0 +1,245 @@
+id,cutoff_run_id,scout_id,driver_id,driver_license_raw,scout_name_raw,amount_paid,currency,import_source,source_file,source_sheet,source_row,payment_rule,payment_component,unique_hash,status,created_at
+8,,3,,Q001983482,Masis Jafeth,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,1,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+9,,10,,Q07557125,Malasquez Angel,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,2,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+10,,10,,Q42540577,Malasquez Angel,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,3,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+11,,11,,Q41726014,Malasquez Jenny Angela,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,4,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+12,,13,,Q10123401,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,5,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+13,,13,,Q06772655,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,6,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+14,,13,,Q44284322,Castillo Steisy Maria,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,7,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+15,,8,,Q25706374,Canales Miguel Angel,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,8,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+16,,5,,Q06722878,Morales Esmeralda,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,9,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+17,,9,,Q45089977,Carrasco Dana,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,10,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+18,,6,,Q10685898,Lizcano Maria Beatriz,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,11,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+19,,6,,X,Lizcano Maria Beatriz,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,12,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+20,,3,,Q06066260,Masis Jafeth,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,13,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+21,,4,,E25814528,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,14,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+22,,4,,Q06274988,Guillen Jose,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,15,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+23,,4,,L45799844,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,16,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+24,,11,,Q80549709,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,17,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+25,,11,,Q75109307,Malasquez Jenny Angela,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,18,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+26,,12,,Q07645594,Romero Roybert,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,19,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+27,,12,,Q40450338,Romero Roybert,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,20,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+28,,13,,Q45122753,Castillo Steisy Maria,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,21,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+29,,14,,Q08281158,Crispin Jair Josue,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,22,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+30,,5,,Q10227835,Morales Esmeralda,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,23,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+31,,7,,X,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,24,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+32,,8,,Q09005527,Canales Miguel Angel,55.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,25,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+33,,6,,V25285914,Lizcano Maria Beatriz,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,26,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+34,,4,,Q41245316,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,27,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+35,,4,,Q006816768,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,28,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+36,,16,,Q005734427,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,29,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+37,,12,,Q41907041,Romero Roybert,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,30,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+38,,4,,Q76578195,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,31,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+39,,4,,Q21443292,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,32,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+40,,4,,Q44578151,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,33,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+41,,7,,Q20719514,Rodriguez Yenker Javier,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,34,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+42,,10,,Q05404754,Malasquez Angel,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,35,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+43,,10,,Q07435787,Malasquez Angel,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,36,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+44,,11,,Q41202921,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,37,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+45,,11,,Q003620428,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,38,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+46,,11,,Q07161101,Malasquez Jenny Angela,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,39,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+47,,12,,Q09768924,Romero Roybert,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,40,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+48,,13,,Q42429240,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,41,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+49,,16,,Q45384834,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,42,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+50,,16,,Q25498695,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,43,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+51,,16,,Q42090751,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,44,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+52,,16,,Q42433749,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,45,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+53,,16,,Q25795998,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,46,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+54,,17,,Q41330800,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,47,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+55,,17,,Q72501373,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,48,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+56,,17,,Q10010071,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,49,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+57,,17,,Q09718049,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,50,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+58,,3,,Q25838684,Masis Jafeth,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,51,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+59,,16,,Q09853280,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,52,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+60,,14,,Q10867196,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,53,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+61,,14,,Q003894167,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,54,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+62,,7,,Q06251282,Rodriguez Yenker Javier,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,55,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+63,,7,,F15417483,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,56,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+64,,6,,Q007179765,Lizcano Maria Beatriz,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,57,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+65,,8,,Q07330520,Canales Miguel Angel,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,58,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+66,,17,,Q07536093,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,59,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+67,,17,,Q42918825,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,60,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+68,,11,,Q02865684,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,61,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+69,,10,,Q44293464,Malasquez Angel,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,62,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+70,,13,,Q70602196,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,63,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+71,,13,,C16788137,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,64,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+72,,4,,Q25783466,Guillen Jose,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,65,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+73,,7,,PA116831,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,66,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+74,,11,,Q22507127,Malasquez Jenny Angela,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,67,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+75,,11,,Q46769772,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,68,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+76,,10,,Q40802505,Malasquez Angel,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,69,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+77,,13,,Q09618955,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,70,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+78,,17,,Q10720358,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,71,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+79,,4,,Q25742720,Guillen Jose,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,72,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+80,,4,,Q09139799,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,73,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+81,,4,,Q08736720,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,74,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+82,,3,,Q45084312,Masis Jafeth,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,75,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+83,,17,,X,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,76,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+84,,17,,Q47173120,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,77,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+85,,11,,Q48435777,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,78,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+86,,13,,B25719730,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,79,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+87,,13,,Q006420826,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,80,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+88,,15,,Q008414024,Pelaez Martha,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,81,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+89,,15,,Q80086742,Pelaez Martha,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,82,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+90,,7,,Q40874181,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,83,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+91,,7,,Q22309509,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,84,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+92,,7,,B07917035,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,85,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+93,,4,,Q06803670,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,86,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+94,,4,,Q09486566,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,87,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+95,,4,,Q43398949,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,88,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+96,,18,,Q07771203,Green Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,89,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+97,,18,,Q46454485,Green Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,90,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+98,,7,,Q61079257,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,91,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+99,,19,,Q45957001,Martha Evelyn Pelaez,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,92,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+100,,14,,Q10685898,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,93,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+101,,14,,Q10128286,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,94,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+102,,17,,Q09485751,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,95,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+103,,12,,Q80103165,Romero Roybert,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,96,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+104,,12,,Q40059520,Romero Roybert,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,97,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+105,,11,,Q48278721,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,98,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+106,,11,,Q002538575,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,99,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+107,,13,,Q42639942,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,100,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+108,,13,,X,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,101,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+109,,13,,Q09457025,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,102,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+110,,14,,Q73062263,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,103,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+111,,15,,Q21131178,Pelaez Martha,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,104,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+112,,15,,X,Pelaez Martha,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,105,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+113,,17,,Q10577257,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,106,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+114,,11,,Q09852308,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,107,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+115,,13,,Q02766550,Castillo Steisy Maria,80.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,108,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+116,,13,,X,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,109,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+117,,18,,vQ10675490,Green Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,110,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+118,,13,,Q006178785,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,111,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+119,,13,,Q40906905,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,112,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+120,,10,,N42735210,Malasquez Angel,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,113,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+121,,15,,P08950956,Pelaez Martha,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,114,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+122,,16,,Q20722055,Saavedra Graham Carlos,25.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,115,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+123,,20,,X,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,116,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+124,,20,,Q07964217,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,117,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+125,,17,,Q41397118,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,118,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+126,,13,,Q09111435,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,119,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+127,,13,,Q07522541,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,120,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+128,,21,,Q22554789,Davalos Gianelly,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,121,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+129,,4,,Q42524813,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,122,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+130,,16,,Q25811010,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,123,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+131,,16,,X,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,124,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+132,,16,,Q07414108,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,125,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+133,,20,,Q09460829,Huangal Geremy Aldahir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,126,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+134,,20,,Q08036046,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,127,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+135,,7,,Q10528908,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,128,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+136,,7,,Q09418670,Rodriguez Yenker Javier,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,129,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+137,,6,,Q40762094,Lizcano Maria Beatriz,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,130,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+138,,6,,X,Lizcano Maria Beatriz,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,131,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+139,,16,,Q73081545,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,132,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+140,,16,,Q09603416,Saavedra Graham Carlos,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,133,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+141,,17,,Q43971427,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,134,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+142,,20,,Q005974728,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,135,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+143,,20,,Q06740753,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,136,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+144,,20,,X,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,137,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+145,,20,,Q46525994,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,138,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+146,,20,,Q45101234,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,139,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+147,,4,,Q006094821,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,140,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+148,,13,,Q22259168,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,141,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+149,,13,,Q74500293,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,142,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+150,,13,,Q09135567,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,143,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+151,,11,,X,Malasquez Jenny Angela,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,144,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+152,,20,,Q40819165,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,145,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+153,,20,,F22078460,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,146,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+154,,13,,X,Castillo Steisy Maria,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,147,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+155,,23,,X,Sotelo Jennifer Melissa,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,148,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+156,,11,,X,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,149,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+157,,17,,Q75067475,Calizaya Gerardo Matias,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,150,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+158,,14,,Q80412645,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,151,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+159,,6,,Q07880106,Lizcano Maria Beatriz,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,152,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+160,,6,,Q70746854,Lizcano Maria Beatriz,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,153,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+161,,20,,Q41639735,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,154,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+162,,20,,Q43433482,Huangal Geremy Aldahir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,155,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+163,,17,,Q40126403,Calizaya Gerardo Matias,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,156,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+164,,4,,Q25823894,Guillen Jose,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,157,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+165,,11,,Q42290377,Malasquez Jenny Angela,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,158,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+166,,11,,Q25789276,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,159,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+167,,11,,Q47712831,Malasquez Jenny Angela,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,160,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+168,,11,,Q61833432,Malasquez Jenny Angela,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,161,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+169,,13,,Q07635312,Castillo Steisy Maria,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,162,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+170,,13,,B03594561,Castillo Steisy Maria,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,163,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+171,,35,,Q25597856,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,164,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+172,,35,,Q42070351,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,165,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+173,,35,,Q80651349,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,166,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+174,,35,,Q42766811,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,167,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+175,,35,,P80050440,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,168,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+176,,35,,Q60805143,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,169,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+177,,35,,Q46237380,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,170,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+178,,14,,Q44202986,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,171,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+179,,14,,Q09822046,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,172,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+180,,14,,Q006713943,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,173,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+181,,35,,Q45311126,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,174,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+182,,35,,Q49012320,Claudemir,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,175,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+183,,35,,Q004037912,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,176,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+184,,35,,Q46263824,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,177,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+185,,35,,H90065176108881,Claudemir,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,178,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+186,,35,,Q45843360,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,179,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+187,,35,,Q47519161,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,180,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+188,,35,,Q72524998,Claudemir,50.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,181,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+189,,35,,Q40529118,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,182,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+190,,35,,Q80217172,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,183,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+191,,35,,F09575789,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,184,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+192,,35,,Y43302594,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,185,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+193,,35,,Q44519855,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,186,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+194,,49,,Q77421781,Ariana Camila Jo,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,187,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+195,,35,,Q21125450,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,188,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+196,,35,,Q08341673,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,189,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+197,,48,,Q46179173,Betzabe Zavala,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,190,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+198,,35,,Q10453389,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,191,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+199,,35,,Q09697156,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,192,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+200,,35,,Q49066246,Claudemir,100.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,193,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+201,,35,,Q80376626,Claudemir,50.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,194,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+202,,35,,Q09946187,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,195,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+203,,35,,Q003469552,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,196,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+204,,14,,Q09116396,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,197,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+205,,14,,Q46854833,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,198,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+206,,41,,Q42845346,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,199,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+207,,35,,Q71244114,Claudemir,50.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,200,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+208,,35,,Q46040400,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,201,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+209,,14,,Q40712791,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,202,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+210,,14,,Q43323030,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,203,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+211,,35,,Q003957498,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,204,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+212,,48,,Q63361351,Betzabe Zavala,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,205,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+213,,35,,Q004367197,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,206,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+214,,35,,Q10719330,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,207,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+215,,35,,Q71255205,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,208,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+216,,14,,Q102370100,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,209,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+217,,48,,Q06432654,Betzabe Zavala,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,210,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+218,,35,,Q46715321,Claudemir,50.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,211,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+219,,35,,Q42805491,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,212,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+220,,35,,C07968502,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,213,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+221,,50,,Q42967203,Fatima Thais Sanchez Saldarriaga,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,214,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+222,,43,,Q25828211,Javier Morante,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,215,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+223,,51,,Q08873325,Elton arnold Llauca Flores,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,216,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+224,,35,,Q47012869,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,217,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+225,,43,,Q72536289,Javier Morante,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,218,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+226,,14,,Q10719330,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,219,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+227,,35,,Q47647790,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,220,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+228,,35,,Q43407303,Claudemir,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,221,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+229,,48,,Q09285964,Betzabe Zavala,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,222,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+230,,41,,Q25790963,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,223,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+231,,14,,V22519523,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,224,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+232,,43,,Q15668470,Javier Morante,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,225,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+233,,51,,C75431879,Elton arnold Llauca Flores,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,226,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+234,,41,,Q40861558,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,227,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+235,,48,,Y42013307,Betzabe Zavala,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,228,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+236,,41,,Q44761288,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,229,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+237,,43,,Q41840274,Javier Morante,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,230,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+238,,43,,Q10515187,Javier Morante,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,231,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+239,,48,,Q41524205,Betzabe Zavala,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,232,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+240,,41,,Q10601288,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,233,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+241,,41,,Q23705025,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,234,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+242,,48,,Q10271960,Betzabe Zavala,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,235,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+243,,35,,Q10592920,Claudemir,50.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,236,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+244,,41,,Q42551205,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,237,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+245,,35,,Q433500121,Claudemir,50.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,238,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+246,,41,,T43828743,Patricia Barrios,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,239,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+247,,14,,Q42409407,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,240,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+248,,14,,Q004517510,Crispin Jair Josue,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,241,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+249,,43,,Q41966434,Javier Morante,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,242,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+250,,35,,Q45668641,Claudemir,45.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,243,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
+251,,43,,Q43696334,Javier Morante,20.00,PEN,historical_upload,p.xlsx,01_PAGOS_HISTORICOS,244,,scout_driver_payment,,paid,2026-05-18 00:24:43.705512
