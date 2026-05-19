@@ -166,13 +166,18 @@ class CutoffScoutSummary(Base):
     )
     origin = Column(String(100))
     total_affiliations = Column(Integer, default=0)
+    total_activated = Column(Integer, default=0)
     converted_5trips_7d = Column(Integer, default=0)
+    total_converted_5v14d = Column(Integer, default=0)
     not_converted = Column(Integer, default=0)
     conversion_rate = Column(Numeric(5, 4))
+    conversion_rate_5v7d = Column(Numeric(5, 4))
     tier_reached = Column(Numeric(5, 4))
     payment_per_converted_driver = Column(Numeric(10, 2))
+    payout_per_activated = Column(Numeric(10, 2))
     amount_calculated = Column(Numeric(12, 2))
     amount_approved = Column(Numeric(12, 2))
+    total_payable = Column(Numeric(12, 2))
     status = Column(String(50), default="pending")
     blocked_reason = Column(Text)
     drivers_1plus_0_7 = Column(Integer, default=0)
@@ -193,6 +198,12 @@ class CutoffScoutSummary(Base):
 
 class CutoffDriverLine(Base):
     __tablename__ = "scout_liq_cutoff_driver_lines"
+    __table_args__ = (
+        UniqueConstraint(
+            "cutoff_run_id", "scout_id", "driver_id",
+            name="uq_cutoff_driver_line"
+        ),
+    )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     cutoff_run_id = Column(
@@ -216,7 +227,13 @@ class CutoffDriverLine(Base):
     source_warning = Column(Text)
     line_status = Column(String(50))
     payment_rule = Column(String(255))
+    activated_flag = Column(Boolean, default=False)
     is_converted_5trips_7d = Column(Boolean, default=False)
+    is_converted_5trips_14d = Column(Boolean, default=False)
+    driver_lifecycle_status = Column(String(50))
+    payment_status = Column(String(50))
+    payout_eligible_flag = Column(Boolean, default=False)
+    calculated_amount = Column(Numeric(10, 2))
     eligible = Column(Boolean, default=True)
     blocked_reason = Column(Text)
     already_paid = Column(Boolean, default=False)

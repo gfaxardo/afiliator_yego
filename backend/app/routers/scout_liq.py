@@ -82,7 +82,7 @@ from app.services.operation_service import (
 )
 from app.services.dashboard_service import (
     get_dashboard_overview, get_dashboard_by_scout, get_dashboard_by_week,
-    get_dashboard_quality_funnel, get_dashboard_alerts,
+    get_dashboard_quality_funnel, get_dashboard_alerts, get_cutoff_trend,
 )
 from app.schemas.scout_liq import (
     ScoutCreate,
@@ -2091,3 +2091,8 @@ def dashboard_alerts(
         "week_iso": week_iso, "scout_id": scout_id, "origin": origin,
     }.items() if v}
     return get_dashboard_alerts(db, **f)
+
+
+@router.get("/dashboard/trend")
+def dashboard_trend(db: Session = Depends(get_db)):
+    return get_cutoff_trend(db)

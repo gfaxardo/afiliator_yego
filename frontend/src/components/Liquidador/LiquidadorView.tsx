@@ -8,8 +8,118 @@ import type { SchemeResponse } from '../../api/scoutLiq'
 
 interface QualityContract { status: string; can_compute_trip_counts: boolean; uses_legacy_booleans_for_payment: boolean; sample_driver_trip_count: any; errors: string[] }
 interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string }
-interface Summary { id: number; scout_id: number; scout_name: string; origin: string; total_affiliations: number; drivers_1plus_0_7: number; drivers_5plus_0_7: number; drivers_1plus_8_14: number; drivers_5plus_0_14: number; not_converted: number; conversion_rate: number; conversion_5plus_0_7_rate: number; tier_reached: number; payment_per_converted_driver: number; amount_calculated: number; status: string; blocked_reason: string; metric_used: string }
-interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; is_converted_5trips_7d: boolean; line_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payment_rule: string; source_quality_status: string }
+interface Summary { id: number; scout_id: number; scout_name: string; origin: string; total_affiliations: number; total_activated: number; drivers_1plus_0_7: number; drivers_5plus_0_7: number; drivers_1plus_8_14: number; drivers_5plus_0_14: number; total_converted_5v14d: number; not_converted: number; conversion_rate: number; conversion_rate_5v7d: number; conversion_5plus_0_7_rate: number; tier_reached: number; payment_per_converted_driver: number; payout_per_activated: number; amount_calculated: number; total_payable: number; status: string; blocked_reason: string; metric_used: string }
+interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string }
+
+// ── Derived display helpers (PRESENTATIONAL – no business logic) ──
+
+function deriveDisplayLifecycle(l: DriverLine): string {
+  if (!l.driver_id || l.source_quality_status !== 'ok') return 'no_driver_id'
+  if (l.payment_status === 'paid') return 'paid'
+  if (l.payout_eligible_flag) return 'payable'
+  if (l.is_converted_5trips_7d) return 'converted_5v7d'
+  if (l.is_converted_5trips_14d) return 'converted_5v14d'
+  if (l.activated_flag) return 'activated'
+  return 'no_trip'
+}
+
+const LIFECYCLE_LABELS: Record<string, string> = {
+  no_driver_id: 'Sin ID',
+  no_trip: 'Sin viajes',
+  activated: 'Activado',
+  converted_5v7d: '5V/7D',
+  converted_5v14d: '5V/14D',
+  payable: 'Pagable',
+  paid: 'Pagado',
+}
+
+const LIFECYCLE_COLORS: Record<string, string> = {
+  no_driver_id: 'bg-red-100 text-red-700',
+  no_trip: 'bg-gray-100 text-gray-500',
+  activated: 'bg-green-100 text-green-700',
+  converted_5v7d: 'bg-blue-100 text-blue-700',
+  converted_5v14d: 'bg-purple-100 text-purple-700',
+  payable: 'bg-emerald-100 text-emerald-700',
+  paid: 'bg-teal-100 text-teal-700',
+}
+
+const PAYMENT_LABELS: Record<string, string> = {
+  blocked: 'Bloqueado',
+  payable: 'Pagable',
+  paid: 'Pagado',
+}
+
+const PAYMENT_COLORS: Record<string, string> = {
+  blocked: 'bg-red-100 text-red-700',
+  payable: 'bg-emerald-100 text-emerald-700',
+  paid: 'bg-teal-100 text-teal-700',
+}
+
+// ── Progress Icons component ──
+
+function ProgressIcons({ line }: { line: DriverLine }) {
+  const hasId = !!(line.driver_id && line.source_quality_status === 'ok')
+  const activated = !!line.activated_flag
+  const conv7 = !!line.is_converted_5trips_7d
+  const conv14 = !!line.is_converted_5trips_14d && !conv7
+  const payable = !!line.payout_eligible_flag
+  const paid = line.payment_status === 'paid'
+
+  const steps = [
+    { key: 'id',   icon: 'ID', label: 'Driver ID', active: hasId },
+    { key: '1v',   icon: '1',  label: '1+ viaje (7d)', active: activated },
+    { key: '5v7d', icon: '7',  label: '5 viajes en 7d', active: conv7 },
+    { key: '5v14d',icon: '14', label: '5 viajes en 14d', active: conv14 },
+    { key: 'pay',  icon: '$',  label: 'Pagable', active: payable },
+    { key: 'paid', icon: '✓',  label: 'Pagado', active: paid },
+  ]
+
+  return (
+    <div className="flex items-center gap-0.5">
+      {steps.map((s, i) => (
+        <div key={s.key} className="flex items-center gap-0.5">
+          <span
+            className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold border ${
+              s.active
+                ? 'bg-green-500 text-white border-green-500'
+                : 'bg-white text-gray-300 border-gray-200'
+            }`}
+            title={s.label + (s.active ? ' ✓' : '')}
+          >
+            {s.icon}
+          </span>
+          {i < steps.length - 1 && (
+            <span className={`w-3 h-0.5 rounded ${s.active ? 'bg-green-400' : 'bg-gray-200'}`} />
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Lifecycle Badge ──
+
+function LifecycleBadge({ status }: { status: string }) {
+  const color = LIFECYCLE_COLORS[status] || 'bg-gray-100 text-gray-500'
+  const label = LIFECYCLE_LABELS[status] || status
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${color}`}>
+      {label}
+    </span>
+  )
+}
+
+// ── Payment Badge ──
+
+function PaymentBadge({ status, reason }: { status: string; reason?: string }) {
+  const color = PAYMENT_COLORS[status] || 'bg-gray-100 text-gray-500'
+  const label = PAYMENT_LABELS[status] || status
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${color}`} title={reason || ''}>
+      {label}
+    </span>
+  )
+}
 
 export default function LiquidadorView() {
   const [contract, setContract] = useState<QualityContract | null>(null)
@@ -21,6 +131,11 @@ export default function LiquidadorView() {
   const [selectedScoutId, setSelectedScoutId] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Client-side filters for driver lines
+  const [filterLifecycle, setFilterLifecycle] = useState('')
+  const [filterPayment, setFilterPayment] = useState('')
+  const [filterOrigin, setFilterOrigin] = useState('')
 
   // Create form
   const [formName, setFormName] = useState('Corte ' + new Date().toISOString().slice(0, 10))
@@ -41,17 +156,43 @@ export default function LiquidadorView() {
   const loadCutoffDetails = (id: number) => {
     setSelectedCutoff(id)
     setSelectedScoutId(null)
+    setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin('')
     Promise.all([getCutoffSummary(id), getCutoffLines(id)])
       .then(([s, l]) => { setSummaries(s); setLines(l) })
       .catch((err: any) => setError(err.response?.data?.detail || err.message))
   }
 
-  const loadLines = (scoutId: number) => {
+  const applyScoutFilter = (scoutId: number) => {
     setSelectedScoutId(scoutId)
-    getCutoffLines(selectedCutoff!, scoutId)
-      .then(setLines)
-      .catch((err: any) => setError(err.message))
   }
+
+  const clearLineFilters = () => {
+    setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin('')
+    setSelectedScoutId(null)
+  }
+
+  const applyPreset = (preset: string) => {
+    clearLineFilters()
+    if (preset === 'no_driver_id') setFilterLifecycle('no_driver_id')
+    else if (preset === 'no_trip') setFilterLifecycle('no_trip')
+    else if (preset === 'activated') setFilterLifecycle('activated')
+    else if (preset === 'converted_5v7d') setFilterLifecycle('converted_5v7d')
+    else if (preset === 'converted_5v14d') setFilterLifecycle('converted_5v14d')
+    else if (preset === 'payable') setFilterLifecycle('payable')
+    else if (preset === 'paid') setFilterLifecycle('paid')
+    else if (preset === 'blocked') setFilterPayment('blocked')
+  }
+
+  // Client-side filtered lines
+  const filteredLines = lines.filter(l => {
+    if (selectedScoutId && l.scout_id !== selectedScoutId) return false
+    if (filterLifecycle && deriveDisplayLifecycle(l) !== filterLifecycle) return false
+    if (filterPayment && l.payment_status !== filterPayment) return false
+    if (filterOrigin && l.origin !== filterOrigin) return false
+    return true
+  })
+
+  const originOptions = [...new Set(lines.map(l => l.origin).filter(Boolean))].sort()
 
   const handleCreate = async () => {
     if (!formName || !formFrom || !formTo || !formScheme) return
@@ -175,19 +316,20 @@ export default function LiquidadorView() {
           <div className="bg-white border rounded-lg overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-gray-50 border-b"><tr>
-                <th className="text-left p-2">Scout</th><th className="text-left p-2">Origen</th><th className="text-left p-2">Afiliados</th><th className="text-left p-2">1+ 0-7d</th><th className="text-left p-2">5+ 0-7d</th><th className="text-left p-2">1+ 8-14d</th><th className="text-left p-2">5+ 0-14d</th><th className="text-left p-2">Conv 5V/7D</th><th className="text-left p-2">Tramo</th><th className="text-left p-2">Pago/conv</th><th className="text-left p-2">Total</th><th className="text-left p-2">Estado</th>
+                <th className="text-left p-2">Scout</th><th className="text-left p-2">Origen</th><th className="text-left p-2">Afiliados</th><th className="text-left p-2">Activados</th><th className="text-left p-2">5V/7D</th><th className="text-left p-2">5V/14D</th><th className="text-left p-2">Conv 5V/7D</th><th className="text-left p-2">Tramo</th><th className="text-left p-2">Pago/act</th><th className="text-left p-2">Total</th><th className="text-left p-2">Estado</th>
               </tr></thead>
               <tbody>
                 {summaries.map(s => (
-                  <tr key={s.id} className="border-t hover:bg-gray-50 cursor-pointer" onClick={() => loadLines(s.scout_id)}>
+                  <tr key={s.id} className="border-t hover:bg-gray-50 cursor-pointer" onClick={() => applyScoutFilter(s.scout_id)}>
                     <td className="p-2 font-medium">{s.scout_name}</td><td className="p-2">{s.origin || '-'}</td><td className="p-2 font-bold">{s.total_affiliations}</td>
-                    <td className="p-2">{s.drivers_1plus_0_7}</td><td className="p-2 font-bold text-blue-700">{s.drivers_5plus_0_7}</td>
-                    <td className="p-2">{s.drivers_1plus_8_14}</td><td className="p-2">{s.drivers_5plus_0_14}</td>
-                    <td className="p-2">{Number(s.conversion_5plus_0_7_rate * 100).toFixed(1)}%</td>
+                    <td className="p-2 font-bold text-green-700">{s.total_activated ?? s.drivers_1plus_0_7}</td>
+                    <td className="p-2 font-bold text-blue-700">{s.drivers_5plus_0_7}</td>
+                    <td className="p-2">{s.total_converted_5v14d ?? s.drivers_5plus_0_14}</td>
+                    <td className="p-2">{Number(s.conversion_rate_5v7d ?? s.conversion_rate * 100).toFixed(1)}%</td>
                     <td className="p-2">{s.tier_reached ? `${Number(s.tier_reached * 100).toFixed(0)}%` : '-'}</td>
-                    <td className="p-2">S/ {Number(s.payment_per_converted_driver).toFixed(2)}</td>
+                    <td className="p-2">S/ {Number(s.payout_per_activated ?? s.payment_per_converted_driver).toFixed(2)}</td>
                     <td className="p-2 font-bold">S/ {Number(s.amount_calculated).toFixed(2)}</td>
-                    <td className="p-2"><span className={`px-1.5 py-0.5 rounded text-xs ${s.status === 'pending' ? 'bg-blue-100 text-blue-700' : s.status === 'blocked' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{s.status}{s.blocked_reason ? `: ${s.blocked_reason}` : ''}</span></td>
+                    <td className="p-2"><span className={`px-1.5 py-0.5 rounded text-xs ${s.status === 'pending' ? 'bg-blue-100 text-blue-700' : s.status === 'blocked' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{s.status}{s.blocked_reason ? `: ${s.blocked_reason?.substring(0, 40)}` : ''}</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -196,30 +338,145 @@ export default function LiquidadorView() {
         </div>
       )}
 
-      {/* Lines detail */}
+      {/* Lines detail — enhanced operational view */}
       {selectedCutoff && lines.length > 0 && (
         <div>
-          <h3 className="font-semibold mb-3">Detalle por Conductor {selectedScoutId ? `(Scout #${selectedScoutId})` : ''}</h3>
-          <div className="bg-white border rounded-lg overflow-x-auto max-h-96 overflow-y-auto">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold">
+              Detalle por Conductor (Corte #{selectedCutoff})
+              {selectedScoutId ? <span className="text-blue-600"> — Scout #{selectedScoutId}</span> : ''}
+            </h3>
+            <span className="text-xs text-gray-400">{filteredLines.length} de {lines.length} conductores</span>
+          </div>
+
+          {/* Presets */}
+          <div className="flex flex-wrap gap-1 mb-2">
+            {[
+              { key: 'no_driver_id', label: 'Sin ID', color: 'border-red-300 text-red-600 hover:bg-red-50' },
+              { key: 'no_trip', label: 'Sin viajes', color: 'border-gray-300 text-gray-500 hover:bg-gray-50' },
+              { key: 'activated', label: 'Activados', color: 'border-green-300 text-green-600 hover:bg-green-50' },
+              { key: 'converted_5v7d', label: '5V/7D', color: 'border-blue-300 text-blue-600 hover:bg-blue-50' },
+              { key: 'converted_5v14d', label: '5V/14D', color: 'border-purple-300 text-purple-600 hover:bg-purple-50' },
+              { key: 'payable', label: 'Pagables', color: 'border-emerald-300 text-emerald-600 hover:bg-emerald-50' },
+              { key: 'paid', label: 'Pagados', color: 'border-teal-300 text-teal-600 hover:bg-teal-50' },
+              { key: 'blocked', label: 'Bloqueados', color: 'border-red-300 text-red-700 hover:bg-red-50' },
+            ].map(p => (
+              <button
+                key={p.key}
+                onClick={() => applyPreset(p.key)}
+                className={`px-2 py-0.5 text-[10px] font-medium border rounded transition-colors ${
+                  (filterLifecycle === p.key || (p.key === 'blocked' && filterPayment === 'blocked'))
+                    ? `${p.color} bg-opacity-20`
+                    : `bg-white ${p.color}`
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Filters */}
+          <div className="flex flex-wrap gap-2 mb-3 items-center bg-white rounded-lg border border-gray-200 px-3 py-1.5">
+            <select
+              value={filterLifecycle}
+              onChange={e => setFilterLifecycle(e.target.value)}
+              className="border border-gray-200 rounded px-2 py-1 text-[11px] bg-white"
+            >
+              <option value="">Todos los estados</option>
+              {Object.entries(LIFECYCLE_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+
+            <select
+              value={filterPayment}
+              onChange={e => setFilterPayment(e.target.value)}
+              className="border border-gray-200 rounded px-2 py-1 text-[11px] bg-white"
+            >
+              <option value="">Todos los pagos</option>
+              {Object.entries(PAYMENT_LABELS).map(([k, v]) => (
+                <option key={k} value={k}>{v}</option>
+              ))}
+            </select>
+
+            <select
+              value={filterOrigin}
+              onChange={e => setFilterOrigin(e.target.value)}
+              className="border border-gray-200 rounded px-2 py-1 text-[11px] bg-white"
+            >
+              <option value="">Todos los origenes</option>
+              {originOptions.map(o => <option key={o} value={o!}>{o}</option>)}
+            </select>
+
+            {(filterLifecycle || filterPayment || filterOrigin || selectedScoutId) && (
+              <button
+                onClick={clearLineFilters}
+                className="text-[11px] text-blue-600 hover:text-blue-800 ml-auto"
+              >
+                Limpiar filtros
+              </button>
+            )}
+          </div>
+
+          {/* Grid */}
+          <div className="bg-white border rounded-lg overflow-x-auto max-h-[60vh] overflow-y-auto">
             <table className="w-full text-xs">
-              <thead className="bg-gray-50 sticky top-0 border-b"><tr>
-                <th className="text-left p-2">Driver ID</th><th className="text-left p-2">Hire Date</th><th className="text-left p-2">Origen</th><th className="text-left p-2">Viajes 0-7d</th><th className="text-left p-2">Viajes 8-14d</th><th className="text-left p-2">Viajes 0-14d</th><th className="text-left p-2">Orders</th><th className="text-left p-2">Hito</th><th className="text-left p-2">Estado</th><th className="text-left p-2">Motivo</th>
+              <thead className="bg-gray-50 sticky top-0 border-b z-10"><tr>
+                <th className="text-left p-2">Progreso</th>
+                <th className="text-left p-2">Driver ID</th>
+                <th className="text-left p-2">Hire</th>
+                <th className="text-left p-2">Origen</th>
+                <th className="text-center p-2 w-10">7d</th>
+                <th className="text-center p-2 w-10">14d</th>
+                <th className="text-left p-2">Ciclo</th>
+                <th className="text-left p-2">Pago</th>
+                <th className="text-left p-2">Motivo</th>
+                <th className="text-right p-2">S/</th>
               </tr></thead>
-              <tbody>
-                {lines.map(l => (
-                  <tr key={l.id} className="border-t hover:bg-gray-50">
-                    <td className="p-2 font-mono text-xs">{l.driver_id?.substring(0, 12)}...</td>
-                    <td className="p-2">{l.hire_date || '-'}</td>
-                    <td className="p-2">{l.origin || '-'}</td>
-                    <td className="p-2 font-bold">{l.trips_0_7_count ?? '-'}</td>
-                    <td className="p-2">{l.trips_8_14_count ?? '-'}</td>
-                    <td className="p-2">{l.trips_0_14_count ?? '-'}</td>
-                    <td className="p-2">{l.total_orders ?? '-'}</td>
-                    <td className="p-2">{l.is_converted_5trips_7d ? <span className="text-green-600 font-bold">5+ (0-7d)</span> : <span className="text-gray-400">No</span>}</td>
-                    <td className="p-2"><span className={`px-1.5 py-0.5 rounded text-xs ${l.line_status?.includes('eligible') ? 'bg-green-100 text-green-700' : l.line_status?.includes('blocked') ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{l.line_status}</span></td>
-                    <td className="p-2 text-xs text-gray-500">{l.blocked_reason || l.payment_rule || '-'}</td>
-                  </tr>
-                ))}
+              <tbody className="divide-y divide-gray-50">
+                {filteredLines.map(l => {
+                  const lifecycle = deriveDisplayLifecycle(l)
+                  return (
+                    <tr key={l.id} className="hover:bg-blue-50/30 transition-colors">
+                      <td className="p-1.5">
+                        <ProgressIcons line={l} />
+                      </td>
+                      <td className="p-2 font-mono text-[11px] max-w-[110px] truncate" title={l.driver_id}>
+                        {l.driver_id ? l.driver_id.substring(0, 14) + (l.driver_id.length > 14 ? '...' : '') : '-'}
+                      </td>
+                      <td className="p-2 text-[11px] whitespace-nowrap text-gray-500">
+                        {l.hire_date || '-'}
+                      </td>
+                      <td className="p-2 text-[11px] text-gray-600 whitespace-nowrap">
+                        {l.origin || '-'}
+                      </td>
+                      <td className="p-2 text-center font-mono text-[11px] font-bold">
+                        {l.trips_0_7_count ?? 0}
+                      </td>
+                      <td className="p-2 text-center font-mono text-[11px]">
+                        {l.trips_0_14_count ?? 0}
+                      </td>
+                      <td className="p-1.5">
+                        <LifecycleBadge status={lifecycle} />
+                      </td>
+                      <td className="p-1.5">
+                        <PaymentBadge
+                          status={l.payment_status || '-'}
+                          reason={l.blocked_reason || undefined}
+                        />
+                      </td>
+                      <td className="p-2 text-[10px] text-gray-400 max-w-[160px] truncate" title={l.blocked_reason || l.payment_rule || ''}>
+                        {l.blocked_reason || l.payment_rule || '-'}
+                      </td>
+                      <td className="p-2 text-right font-mono text-[11px] font-medium whitespace-nowrap">
+                        {l.payout_eligible_flag && l.calculated_amount
+                          ? <span className="text-emerald-700">S/ {Number(l.calculated_amount).toFixed(0)}</span>
+                          : <span className="text-gray-300">-</span>
+                        }
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

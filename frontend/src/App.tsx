@@ -15,6 +15,7 @@ import PaidHistoryView from './components/Liquidador/PaidHistoryView'
 import AttributionImportView from './components/Liquidador/AttributionImportView'
 import WorkbookImportView from './components/Liquidador/WorkbookImportView'
 import OperationView from './components/Liquidador/OperationView'
+import DashboardView from './components/Liquidador/DashboardView'
 
 function App() {
   return (
@@ -36,21 +37,12 @@ function App() {
           <Route path="paid-history" element={<PaidHistoryView />} />
           <Route path="attributions" element={<AttributionImportView />} />
           <Route path="workbook" element={<WorkbookImportView />} />
-          <Route path="dashboard" element={<Placeholder title="Dashboard" />} />
+          <Route path="dashboard" element={<DashboardView />} />
           <Route path="historial" element={<PaidHistoryView />} />
         </Route>
         <Route path="*" element={<Navigate to="/scout-liq" replace />} />
       </Routes>
     </BrowserRouter>
-  )
-}
-
-function Placeholder({ title }: { title: string }) {
-  return (
-    <div className="p-8 text-center text-gray-400">
-      <h2 className="text-xl font-semibold mb-2">{title}</h2>
-      <p>Seccion en construccion</p>
-    </div>
   )
 }
 

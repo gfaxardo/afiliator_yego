@@ -239,7 +239,7 @@ def get_quality_data_contract_status(db: Session) -> Dict[str, Any]:
                 "FROM module_ct_cabinet_drivers s "
                 "LEFT JOIN trips_2026 t ON s.driver_id = t.conductor_id "
                 "AND t.fecha_inicio_viaje >= s.hire_date::date "
-                "AND t.fecha_inicio_viaje < s.hire_date::date + INTERVAL '8 days' "
+                "AND t.fecha_inicio_viaje < s.hire_date::date + INTERVAL '7 days' "
                 "AND t.condicion = 'Completado' "
                 "WHERE s.hire_date IS NOT NULL AND s.hire_date != '' "
                 "GROUP BY s.driver_id, s.hire_date LIMIT 1"
@@ -291,12 +291,12 @@ def compute_trip_counts_batch(
             SELECT
                 COUNT(*) FILTER (
                     WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '8 days'
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '7 days'
                       AND condicion = 'Completado'
                 ) AS trips_0_7,
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '8 days'
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '15 days'
+                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
                       AND condicion = 'Completado'
                 ) AS trips_8_14
             FROM trips_2026
@@ -305,12 +305,12 @@ def compute_trip_counts_batch(
             SELECT
                 COUNT(*) FILTER (
                     WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '8 days'
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '7 days'
                       AND condicion = 'Completado'
                 ) AS trips_0_7,
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '8 days'
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '15 days'
+                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
                       AND condicion = 'Completado'
                 ) AS trips_8_14
             FROM trips_2025

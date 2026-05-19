@@ -75,14 +75,30 @@ def create_cutoff_run(
             "driver_id": "module_ct_cabinet_drivers.driver_id",
             "hire_date": "module_ct_cabinet_drivers.hire_date (CAST to DATE)",
             "origin": "module_ct_cabinet_drivers.origen",
-            "trips_0_7_count": "JOIN trips_2025/trips_2026 via conductor_id",
-            "trips_8_14_count": "JOIN trips_2025/trips_2026 via conductor_id",
+            "trips_0_7_count": "JOIN trips_2025/trips_2026 via conductor_id (0-6 days inclusive, condicion=Completado)",
+            "trips_8_14_count": "JOIN trips_2025/trips_2026 via conductor_id (7-13 days inclusive, condicion=Completado)",
+            "conversion_rule": "5v7d_rate = converted_5v7d / activated_drivers",
+            "payment_rule": "total_payable = activated_drivers × tier_amount",
         }),
     )
     db.add(run)
     db.commit()
     db.refresh(run)
     return run
+
+
+def _compute_lifecycle(trips_0_7: int, trips_8_14: int, trips_0_14: int) -> str:
+    if trips_0_7 == 0 and trips_0_14 == 0:
+        return "no_trip"
+    if trips_0_7 >= 1 and trips_0_7 < 5:
+        if trips_0_14 >= 5:
+            return "converted_5v14d"
+        return "activated"
+    if trips_0_7 >= 5:
+        return "converted_5v7d"
+    if trips_0_14 >= 5:
+        return "converted_5v14d"
+    return "no_trip"
 
 
 def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
@@ -187,7 +203,7 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             hire_date=hire_date,
             origin=assignment.origin or src.get("origin") or assignment.source_origin,
             trips_7d=trips_0_7,
-            trips_14d=trips_8_14,
+            trips_14d=trips_0_14,
             trips_0_7_count=trips_0_7,
             trips_8_14_count=trips_8_14,
             trips_0_14_count=trips_0_14,
@@ -216,11 +232,13 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
         drivers_5plus_0_14 = sum(1 for l in has_valid_date if (l.trips_0_14_count or 0) >= 5)
         not_converted = total_aff - drivers_5plus_0_7
 
-        rate_5plus = Decimal(str(drivers_5plus_0_7 / total_aff)) if total_aff > 0 else Decimal("0")
+        # Conversion rate: converted_5v7d / ACTIVATED (not total affiliates)
+        total_activated = drivers_1plus_0_7
+        rate_5plus = Decimal(str(drivers_5plus_0_7 / total_activated)) if total_activated > 0 else Decimal("0")
         rate_1plus = Decimal(str(drivers_1plus_0_7 / total_aff)) if total_aff > 0 else Decimal("0")
-        rate_5plus_14 = Decimal(str(drivers_5plus_0_14 / total_aff)) if total_aff > 0 else Decimal("0")
+        rate_5plus_14 = Decimal(str(drivers_5plus_0_14 / total_activated)) if total_activated > 0 else Decimal("0")
 
-        # Find applicable tier
+        # Find applicable tier (based on conversion rate of activated drivers)
         tier_reached = None
         payment_per = Decimal("0")
         for t in tiers:
@@ -229,23 +247,29 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 payment_per = Decimal(str(t["payment_per_converted_driver"]))
 
         blocked_reason = None
-        if total_aff < min_aff:
-            blocked_reason = f"Minimo {min_aff} afiliaciones requerido, tiene {total_aff}"
+        if total_activated < min_aff:
+            blocked_reason = f"Minimo {min_aff} activados requerido, tiene {total_activated}"
 
-        amount = Decimal(str(drivers_5plus_0_7)) * payment_per if tier_reached and not blocked_reason else Decimal("0")
+        # Payment: activated_drivers × tier_amount (NOT converted × tier)
+        amount = Decimal(str(total_activated)) * payment_per if tier_reached and not blocked_reason else Decimal("0")
 
         summary = CutoffScoutSummary(
             cutoff_run_id=cutoff_run_id,
             scout_id=sid,
             origin=group["lines"][0].origin if group["lines"] else None,
             total_affiliations=total_aff,
+            total_activated=total_activated,
             converted_5trips_7d=drivers_5plus_0_7,
+            total_converted_5v14d=drivers_5plus_0_14,
             not_converted=not_converted,
             conversion_rate=rate_5plus,
+            conversion_rate_5v7d=rate_5plus,
             tier_reached=Decimal(str(tier_reached["min_conversion_rate"])) if tier_reached else None,
             payment_per_converted_driver=payment_per,
+            payout_per_activated=payment_per,
             amount_calculated=amount,
             amount_approved=Decimal("0"),
+            total_payable=amount,
             status="pending" if not blocked_reason else "blocked",
             blocked_reason=blocked_reason,
             drivers_1plus_0_7=drivers_1plus_0_7,
@@ -260,25 +284,54 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
         )
         db.add(summary)
 
-        # Update line statuses
+        # Update line statuses with proper lifecycle states
         for l in lines:
+            trips_0_7 = l.trips_0_7_count or 0
+            trips_8_14 = l.trips_8_14_count or 0
+            trips_0_14 = l.trips_0_14_count or 0
+
             if l.source_quality_status != "ok":
                 l.line_status = "blocked_invalid_hire_date"
                 l.blocked_reason = "sin hire_date valida"
+                l.driver_lifecycle_status = "no_driver_id"
+                l.eligible = False
             elif l.already_paid:
                 l.line_status = "blocked_already_paid"
                 l.blocked_reason = "ya pagado en corte anterior"
+                l.payment_status = "blocked"
+                l.driver_lifecycle_status = _compute_lifecycle(trips_0_7, trips_0_14 - trips_0_7, trips_0_14)
+                l.eligible = False
             elif blocked_reason:
-                l.line_status = "blocked_min_affiliations"
+                l.line_status = "blocked_min_activated"
                 l.blocked_reason = blocked_reason
-            elif (l.trips_0_7_count or 0) >= 5:
-                l.line_status = "eligible"
-                l.is_converted_5trips_7d = True
-                l.payment_rule = f"{tier_reached['min_conversion_rate']}% -> {payment_per} {tier_reached['currency']}" if tier_reached else None
+                l.payment_status = "blocked"
+                l.driver_lifecycle_status = _compute_lifecycle(trips_0_7, trips_0_14 - trips_0_7, trips_0_14)
+                l.eligible = False
             else:
-                l.line_status = "not_converted"
-                l.blocked_reason = "no alcanza 5 viajes en 0-7 dias"
-                l.is_converted_5trips_7d = False
+                l.driver_lifecycle_status = _compute_lifecycle(trips_0_7, trips_0_14 - trips_0_7, trips_0_14)
+                l.is_converted_5trips_7d = trips_0_7 >= 5
+                l.is_converted_5trips_14d = (trips_0_7 + trips_8_14) >= 5
+                l.activated_flag = trips_0_7 >= 1
+
+                if tier_reached and trips_0_7 >= 1:
+                    l.line_status = "payable"
+                    l.payment_status = "payable"
+                    l.payout_eligible_flag = True
+                    l.calculated_amount = payment_per
+                    l.payment_rule = f"{tier_reached['min_conversion_rate']}% -> {payment_per} {tier_reached['currency']}"
+                    l.eligible = True
+                elif trips_0_7 >= 1:
+                    l.line_status = "activated_no_tier"
+                    l.payment_status = "blocked"
+                    l.blocked_reason = "no_conversion_tier"
+                    l.payout_eligible_flag = False
+                    l.eligible = False
+                else:
+                    l.line_status = "no_trip"
+                    l.payment_status = "blocked"
+                    l.blocked_reason = "no_activation"
+                    l.payout_eligible_flag = False
+                    l.eligible = False
 
     run.status = "calculated"
     run.conversion_metric_status = "ok"
@@ -313,17 +366,22 @@ def get_cutoff_summary(db: Session, cutoff_run_id: int) -> List[Dict]:
             "scout_name": name,
             "origin": s.origin,
             "total_affiliations": s.total_affiliations,
+            "total_activated": s.total_activated,
             "drivers_1plus_0_7": s.drivers_1plus_0_7,
             "drivers_5plus_0_7": s.drivers_5plus_0_7,
             "drivers_1plus_8_14": s.drivers_1plus_8_14,
             "drivers_5plus_0_14": s.drivers_5plus_0_14,
+            "total_converted_5v14d": s.total_converted_5v14d,
             "not_converted": s.not_converted,
             "conversion_rate": float(s.conversion_rate) if s.conversion_rate else 0,
+            "conversion_rate_5v7d": float(s.conversion_rate_5v7d) if s.conversion_rate_5v7d else 0,
             "conversion_5plus_0_7_rate": float(s.conversion_5plus_0_7_rate) if s.conversion_5plus_0_7_rate else 0,
             "tier_reached": float(s.tier_reached) if s.tier_reached else None,
             "payment_per_converted_driver": float(s.payment_per_converted_driver) if s.payment_per_converted_driver else 0,
+            "payout_per_activated": float(s.payout_per_activated) if s.payout_per_activated else 0,
             "amount_calculated": float(s.amount_calculated) if s.amount_calculated else 0,
             "amount_approved": float(s.amount_approved) if s.amount_approved else 0,
+            "total_payable": float(s.total_payable) if s.total_payable else 0,
             "status": s.status,
             "blocked_reason": s.blocked_reason,
             "metric_used": s.metric_used,
@@ -350,11 +408,17 @@ def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = 
             "total_orders": l.total_orders,
             "legacy_viajes_0_7_flag": l.legacy_viajes_0_7_flag,
             "legacy_viajes_8_14_flag": l.legacy_viajes_8_14_flag,
+            "activated_flag": l.activated_flag,
             "is_converted_5trips_7d": l.is_converted_5trips_7d,
+            "is_converted_5trips_14d": l.is_converted_5trips_14d,
+            "driver_lifecycle_status": l.driver_lifecycle_status,
             "line_status": l.line_status,
+            "payment_status": l.payment_status,
             "blocked_reason": l.blocked_reason,
             "eligible": l.eligible,
             "already_paid": l.already_paid,
+            "payout_eligible_flag": l.payout_eligible_flag,
+            "calculated_amount": float(l.calculated_amount) if l.calculated_amount else None,
             "payment_rule": l.payment_rule,
             "source_quality_status": l.source_quality_status,
             "source_warning": l.source_warning,
@@ -406,10 +470,12 @@ def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
 
     for s in summaries:
         s.status = "paid"
+        s.total_payable = s.amount_calculated
+        s.amount_approved = s.amount_calculated
         lines = db.query(CutoffDriverLine).filter(
             CutoffDriverLine.cutoff_run_id == cutoff_run_id,
             CutoffDriverLine.scout_id == s.scout_id,
-            CutoffDriverLine.line_status == "eligible",
+            CutoffDriverLine.payout_eligible_flag == True,
         ).all()
         for l in lines:
             config = json.loads(run.config_snapshot) if run.config_snapshot else {}
@@ -421,7 +487,7 @@ def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 driver_id=l.driver_id,
                 origin=l.origin,
                 payment_rule=l.payment_rule,
-                amount_paid=s.payment_per_converted_driver,
+                amount_paid=l.calculated_amount or s.payout_per_activated,
                 currency="PEN",
                 paid_at=datetime.now(),
                 import_source="cutoff_engine",
@@ -432,8 +498,11 @@ def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 cutoff_window_from=run.hire_date_from,
                 cutoff_window_to=run.hire_date_to,
                 status="paid",
+                blocks_future_payment=True,
             )
             db.add(ph)
+            l.line_status = "paid"
+            l.payment_status = "paid"
 
     run.status = "paid"
     run.paid_at = datetime.now()

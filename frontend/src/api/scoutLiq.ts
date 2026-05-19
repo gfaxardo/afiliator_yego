@@ -1011,3 +1011,26 @@ export async function getDashboardAlerts(params?: Record<string, any>): Promise<
   const { data } = await api.get('/dashboard/alerts', { params })
   return data
 }
+
+// ── Dashboard Trend (cutoff snapshots only) ──
+
+export interface TrendItem {
+  id: number
+  cutoff_name: string
+  status: string
+  hire_date_from: string
+  hire_date_to: string
+  total_affiliations: number
+  total_activated: number
+  converted_5v7d: number
+  converted_5v14d: number
+  total_payout: number
+  total_payable: number
+  blocked_scouts: number
+  paid_scouts: number
+}
+
+export async function getCutoffTrend(): Promise<TrendItem[]> {
+  const { data } = await api.get('/dashboard/trend')
+  return data
+}

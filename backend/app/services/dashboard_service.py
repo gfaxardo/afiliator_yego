@@ -305,3 +305,48 @@ def get_dashboard_alerts(db: Session, **filters) -> Dict[str, Any]:
         "supervisor_missing_count": q("AND lil.supervisor_id_resolved IS NULL AND lil.supervisor_raw IS NOT NULL"),
         "cutoff_pending": db.execute(text("SELECT COUNT(*) FROM scout_liq_cutoff_runs")).scalar() == 0,
     }
+
+
+def get_cutoff_trend(db: Session) -> List[Dict[str, Any]]:
+    """Trend data from cutoff snapshots only — no recalculation."""
+    rows = db.execute(text("""
+        SELECT
+            cr.id,
+            cr.cutoff_name,
+            cr.status,
+            cr.hire_date_from::text,
+            cr.hire_date_to::text,
+            COALESCE(SUM(css.total_affiliations), 0)::int AS total_affiliations,
+            COALESCE(SUM(css.total_activated), 0)::int AS total_activated,
+            COALESCE(SUM(css.converted_5trips_7d), 0)::int AS converted_5v7d,
+            COALESCE(SUM(css.total_converted_5v14d), 0)::int AS converted_5v14d,
+            COALESCE(SUM(css.amount_calculated), 0)::numeric AS total_payout,
+            COALESCE(SUM(css.total_payable), 0)::numeric AS total_payable,
+            COUNT(CASE WHEN css.status = 'blocked' THEN 1 END)::int AS blocked_scouts,
+            COUNT(CASE WHEN css.status = 'paid' THEN 1 END)::int AS paid_scouts
+        FROM scout_liq_cutoff_runs cr
+        LEFT JOIN scout_liq_cutoff_scout_summary css ON css.cutoff_run_id = cr.id
+        WHERE cr.status IN ('calculated', 'reviewed', 'approved', 'paid')
+        GROUP BY cr.id, cr.cutoff_name, cr.status, cr.hire_date_from, cr.hire_date_to
+        ORDER BY cr.id DESC
+        LIMIT 20
+    """)).fetchall()
+
+    return [
+        {
+            "id": r[0],
+            "cutoff_name": r[1],
+            "status": r[2],
+            "hire_date_from": r[3],
+            "hire_date_to": r[4],
+            "total_affiliations": r[5],
+            "total_activated": r[6],
+            "converted_5v7d": r[7],
+            "converted_5v14d": r[8],
+            "total_payout": float(r[9] or 0),
+            "total_payable": float(r[10] or 0),
+            "blocked_scouts": r[11],
+            "paid_scouts": r[12],
+        }
+        for r in rows
+    ]
