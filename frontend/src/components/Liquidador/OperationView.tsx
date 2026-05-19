@@ -94,6 +94,14 @@ function derivePayment(row: AffiliationRow): { status: string; reason: string } 
     return { status: 'no_payable', reason: row.blocking_display }
   }
 
+  // 5b. Blocking statuses not covered by blocking_display (backend maps them to 'Pendiente')
+  const DIRECT_BLOCKING_MAP: Record<string, string> = {
+    'payment_blocking_not_applicable_bad_status': 'Estado no elegible',
+  }
+  if (row.payment_blocking_status && DIRECT_BLOCKING_MAP[row.payment_blocking_status]) {
+    return { status: 'no_payable', reason: DIRECT_BLOCKING_MAP[row.payment_blocking_status] }
+  }
+
   // 6. Duplicado (payment_blocking sin manual_review)
   if (row.payment_blocking_status === 'payment_blocking_duplicate') {
     return { status: 'no_payable', reason: 'Duplicado' }
@@ -211,6 +219,7 @@ const MOTIVO_COLORS: Record<string, string> = {
   'Revisión manual': 'text-orange-600 font-medium',
   'Mínimo scout no alcanzado': 'text-orange-600 font-medium',
   'Ya pagado antes': 'text-teal-600 font-medium',
+  'Estado no elegible': 'text-red-600 font-medium',
   'Sin monto': 'text-gray-500',
   'Regla no alcanzada': 'text-gray-500',
 }
