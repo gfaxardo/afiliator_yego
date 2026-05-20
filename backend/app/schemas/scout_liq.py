@@ -494,3 +494,82 @@ class AttributionImportCommitResult(BaseModel):
     conflicts: int = 0
     duplicates: int = 0
     rejected: int = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Canonical Operation Snapshot (Fase: fuente maestra)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class CanonicalDriverItem(BaseModel):
+    driver_id: Optional[str] = None
+    driver_name: str = ""
+    license: Optional[str] = None
+    hire_date: Optional[str] = None
+    iso_week: Optional[str] = None
+    iso_week_label: Optional[str] = None
+    origin: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    scout_id: Optional[int] = None
+    scout_name: Optional[str] = None
+    supervisor_name: Optional[str] = None
+    attribution_status: str = "unassigned"
+    trips_7d: int = 0
+    trips_14d: int = 0
+    activated_flag: bool = False
+    converted_5v7d: bool = False
+    converted_5v14d: bool = False
+    driver_lifecycle_status: str = "no_trip"
+    legacy_viajes_0_7: Optional[bool] = None
+    legacy_viajes_8_14: Optional[bool] = None
+    total_orders: Optional[int] = None
+    payment_status: str = "not_payable"
+    payment_origin: str = "none"
+    payment_rule_label: Optional[str] = None
+    payment_evidence_label: Optional[str] = None
+    payment_trace_status: Optional[str] = "ok"
+    payment_trace_warning: Optional[str] = None
+    payment_basis_label: Optional[str] = None
+    amount: Optional[float] = None
+    paid_history_id: Optional[int] = None
+    reason: str = "ok"
+    counts_as_activated_base: bool = False
+    counts_as_quality_5v7d: bool = False
+    counts_for_payment: bool = False
+    scout_activated_base: int = 0
+    scout_quality_5v7d: int = 0
+    scout_conversion_rate_5v7d: float = 0.0
+    scout_tier_amount: float = 0.0
+    scout_tier_threshold: float = 0.0
+    payment_formula_label: Optional[str] = ""
+    source_driver_status: Optional[str] = None
+    source_updated_at: Optional[str] = None
+
+
+class CanonicalFreshness(BaseModel):
+    source_max_hire_date: Optional[str] = None
+    data_lag_days: Optional[int] = None
+    source_max_updated_at: Optional[str] = None
+    source_max_created_at: Optional[str] = None
+    total_source_rows: Optional[int] = None
+    null_invalid_driver_id_count: Optional[int] = None
+    null_hire_date_count: Optional[int] = None
+    freshness_status: str = "unknown"
+
+
+class CanonicalOperationSnapshotResponse(BaseModel):
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+    items: List[CanonicalDriverItem] = []
+    freshness: CanonicalFreshness = CanonicalFreshness()
+
+
+class OperationDiagnosticResponse(BaseModel):
+    source_table: str = ""
+    filters_applied: dict = {}
+    base_counts: dict = {}
+    trip_metrics: dict = {}
+    payment_metrics: dict = {}
+    freshness: dict = {}
+    attribution_quality: dict = {}

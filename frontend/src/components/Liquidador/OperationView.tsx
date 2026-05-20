@@ -1,22 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  getOperationSummary, getOperationFilters, getAffiliations, getAffiliationDetail,
-  type OperationSummary, type OperationFilters, type AffiliationRow, type AffiliationsResponse
+  getCanonicalOperation, getOperationDiagnostic,
+  type CanonicalDriver, type CanonicalSnapshotResponse,
+  type CanonicalFreshness, type OperationDiagnosticResponse,
 } from '../../api/scoutLiq'
 
-// ── ESTADO: que logro el driver (OPERATIONAL ONLY) ──
-
-function deriveLifecycle(row: AffiliationRow): string {
-  if (parseInt(row.trips_8_14_count || '0') >= 5) return 'converted_5v14d'
-  if (row.converted_5v_7d === 1) return 'converted_5v7d'
-  if (row.attribution_status === 'attribution_ready' || parseInt(row.trips_0_7_count || '0') > 0) return 'activated'
-  if (row.driver_id) return 'no_trips'
-  return 'no_driver_id'
-}
+// ── LIFECYCLE desde datos canonicos ──
 
 const LIFECYCLE_LABELS: Record<string, string> = {
   no_driver_id: 'SIN ID',
   no_trips: 'SIN VIAJES',
+  sin_scout: 'SIN SCOUT',
   activated: 'ACTIVADO',
   converted_5v7d: '5V/7D',
   converted_5v14d: '5V/14D',
@@ -25,18 +19,29 @@ const LIFECYCLE_LABELS: Record<string, string> = {
 const LIFECYCLE_COLORS: Record<string, string> = {
   no_driver_id: 'bg-red-100 text-red-700 border-red-300',
   no_trips: 'bg-gray-100 text-gray-500 border-gray-300',
+  sin_scout: 'bg-yellow-100 text-yellow-700 border-yellow-300',
   activated: 'bg-green-100 text-green-700 border-green-300',
   converted_5v7d: 'bg-blue-100 text-blue-700 border-blue-400',
   converted_5v14d: 'bg-purple-100 text-purple-700 border-purple-300',
 }
 
 const LIFECYCLE_ROW_BORDER: Record<string, string> = {
+  sin_scout: 'border-l-4 border-l-yellow-400',
   converted_5v7d: 'border-l-4 border-l-blue-400',
   converted_5v14d: 'border-l-4 border-l-purple-400',
   activated: 'border-l-4 border-l-green-400',
 }
 
-// ── PAGO: genera dinero? ──
+function deriveLifecycle(row: CanonicalDriver): string {
+  if (row.attribution_status === 'unassigned') return 'sin_scout'
+  if (row.converted_5v14d) return 'converted_5v14d'
+  if (row.converted_5v7d) return 'converted_5v7d'
+  if (row.activated_flag) return 'activated'
+  if (row.driver_id) return 'no_trips'
+  return 'no_driver_id'
+}
+
+// ── PAGO desde datos canonicos ──
 
 const PAYMENT_LABELS: Record<string, string> = {
   payable: 'PAGABLE',
@@ -52,101 +57,47 @@ const PAYMENT_COLORS: Record<string, string> = {
   revisar: 'bg-orange-100 text-orange-700',
 }
 
-function parseBlockingDisplay(bd: string): string | null {
-  const b = bd.toLowerCase()
-  if (b.includes('ya registrado') || b.includes('ya pagado') || b.includes('already_paid')) return 'Ya pagado antes'
-  if (b.includes('minimo') || b.includes('mínimo') || b.includes('min_aff') || b.includes('min_act')) return 'Mínimo scout no alcanzado'
-  if (b.includes('sin activacion') || b.includes('sin activación')) return 'Sin activación'
-  if (b.includes('duplicado') || b.includes('duplicate')) return 'Duplicado'
-  if (b.includes('sin scout') || b.includes('no_scout') || b.includes('falta scout')) return 'Sin scout'
-  if (b.includes('sin driver') || b.includes('no_driver')) return 'Sin driver ID'
-  if (b.includes('scout') && (b.includes('min') || b.includes('no alcan'))) return 'Mínimo scout no alcanzado'
-  return null
+const PAYMENT_ORIGIN_LABELS: Record<string, string> = {
+  cutoff: 'Corte',
+  historical_upload: 'Historico',
+  manual: 'Manual',
+  none: 'Ninguno',
 }
 
-function derivePayment(row: AffiliationRow): { status: string; reason: string } {
-  // 1. PAGADO — has a paid history record in this cut
-  if (row.paid_history_id) return { status: 'paid', reason: '' }
+function derivePayment(row: CanonicalDriver): { status: string; reason: string; originLabel: string } {
+  const origin = row.payment_origin || 'none'
+  const originLabel = PAYMENT_ORIGIN_LABELS[origin] || origin
 
-  // 2. Sin driver ID operacional → NO PAGABLE
-  if (!row.driver_id) return { status: 'no_payable', reason: 'Sin driver ID' }
-
-  // 3. Sin activación (0 viajes, sin atribución) → NO PAGABLE
-  if (parseInt(row.trips_0_7_count || '0') === 0 &&
-      parseInt(row.trips_8_14_count || '0') === 0 &&
-      row.attribution_status !== 'attribution_ready') {
-    return { status: 'no_payable', reason: 'Sin activación' }
+  if (row.payment_status === 'paid') {
+    return { status: 'paid', reason: originLabel, originLabel }
   }
-
-  // 4. Manual review (cualquier campo) → REVISAR
-  if (row.attribution_status === 'attribution_manual_review' ||
-      row.payment_financial_status?.includes('manual_review') ||
-      row.payment_blocking_status?.includes('manual_review')) {
-    return { status: 'revisar', reason: 'Revisión manual' }
+  if (row.payment_status === 'payable') {
+    return { status: 'payable', reason: '', originLabel }
   }
-
-  // 5. Parsear blocking_display ANTES que Sin monto (tiene prioridad)
-  if (row.blocking_display && row.blocking_display !== 'N/A' &&
-      row.blocking_display !== 'Pendiente' && row.blocking_display !== 'No bloquea') {
-    const parsed = parseBlockingDisplay(row.blocking_display)
-    if (parsed) return { status: 'no_payable', reason: parsed }
-    if (row.blocking_display === 'Bloquea') return { status: 'no_payable', reason: 'Regla no alcanzada' }
-    return { status: 'no_payable', reason: row.blocking_display }
-  }
-
-  // 5b. Blocking statuses not covered by blocking_display (backend maps them to 'Pendiente')
-  const DIRECT_BLOCKING_MAP: Record<string, string> = {
-    'payment_blocking_not_applicable_bad_status': 'Estado no elegible',
-  }
-  if (row.payment_blocking_status && DIRECT_BLOCKING_MAP[row.payment_blocking_status]) {
-    return { status: 'no_payable', reason: DIRECT_BLOCKING_MAP[row.payment_blocking_status] }
-  }
-
-  // 6. Duplicado (payment_blocking sin manual_review)
-  if (row.payment_blocking_status === 'payment_blocking_duplicate') {
-    return { status: 'no_payable', reason: 'Duplicado' }
-  }
-
-  // 7. Sin monto (financial N/A) — solo si no hay causa mas especifica
-  if (row.payment_financial_status === 'payment_financial_not_applicable_no_amount' ||
-      row.payment_blocking_status === 'payment_blocking_not_applicable_no_amount') {
-    return { status: 'no_payable', reason: 'Sin monto' }
-  }
-
-  // 8. PAGABLE — financial ready y sin bloqueo activo
-  if (row.payment_financial_status === 'payment_financial_ready' &&
-      (!row.payment_blocking_status || row.payment_blocking_status === 'payment_blocking_ready')) {
-    return { status: 'payable', reason: '' }
-  }
-
-  // 9. Sin monto (fallback si no hay amount_paid ni causa especifica)
-  if (!row.amount_paid && row.amount_paid !== 0) return { status: 'no_payable', reason: 'Sin monto' }
-
-  // 10. Default
-  return { status: 'no_payable', reason: 'Regla no alcanzada' }
+  if (row.reason === 'no_scout') return { status: 'no_payable', reason: 'Sin scout', originLabel }
+  if (row.reason === 'no_activation') return { status: 'no_payable', reason: 'Sin activacion', originLabel }
+  if (row.reason === 'already_paid') return { status: 'paid', reason: 'Ya pagado antes', originLabel }
+  if (row.reason === 'manual_review') return { status: 'revisar', reason: 'Revision manual', originLabel }
+  return { status: 'no_payable', reason: row.reason || 'Sin regla', originLabel }
 }
 
-// ── Progress Icons (operational flow only, no payment state in steps) ──
+// ── Progress Icons ──
 
-function ProgressIcons({ row }: { row: AffiliationRow }) {
+function ProgressIcons({ row }: { row: CanonicalDriver }) {
   const hasId = !!row.driver_id
-  const has1Trip = parseInt(row.trips_0_7_count || '0') > 0
-  const conv7 = row.converted_5v_7d === 1
-  const conv14 = parseInt(row.trips_8_14_count || '0') >= 5
-  const payable = row.payment_financial_status === 'payment_financial_ready' &&
-    (!row.payment_blocking_status || row.payment_blocking_status === 'payment_blocking_ready')
-  const paid = !!row.paid_history_id
-  const noPayable = !paid && !payable && !!(
-    row.payment_blocking_status && row.payment_blocking_status !== 'payment_blocking_ready'
-  )
+  const has1Trip = row.activated_flag
+  const conv7 = row.converted_5v7d
+  const conv14 = row.converted_5v14d
+  const isPaid = row.payment_status === 'paid'
+  const isPayable = row.payment_status === 'payable'
 
   const steps = [
     { key: 'id', icon: 'ID', label: 'Driver ID', active: hasId },
     { key: '1v', icon: '1', label: '1+ viaje (7d)', active: has1Trip },
     { key: '5v7d', icon: '7', label: '5 viajes 7d', active: conv7 },
     { key: '5v14d', icon: '14', label: '5 viajes 14d', active: conv14 },
-    { key: 'pay', icon: '$', label: 'Pagable', active: payable && !paid },
-    { key: 'done', icon: '\u2713', label: paid ? 'Pagado' : 'Pendiente', active: paid },
+    { key: 'pay', icon: '$', label: 'Pagable', active: isPayable && !isPaid },
+    { key: 'done', icon: '\u2713', label: isPaid ? 'Pagado' : 'Pendiente', active: isPaid },
   ]
 
   return (
@@ -157,9 +108,7 @@ function ProgressIcons({ row }: { row: AffiliationRow }) {
             className={`inline-flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold border ${
               s.active
                 ? 'bg-green-500 text-white border-green-500'
-                : (s.key === 'done' && noPayable)
-                  ? 'bg-gray-200 text-gray-400 border-gray-300'
-                  : 'bg-white text-gray-300 border-gray-200'
+                : 'bg-white text-gray-300 border-gray-200'
             }`}
             title={s.label}
           >
@@ -186,13 +135,18 @@ function LifecycleBadge({ status }: { status: string }) {
   )
 }
 
-function PaymentBadge({ status }: { status: string }) {
+function PaymentBadge({ status, originLabel }: { status: string; originLabel?: string }) {
   const color = PAYMENT_COLORS[status] || 'bg-gray-100 text-gray-500'
   const label = PAYMENT_LABELS[status] || status
   return (
-    <span className={`px-2.5 py-1 rounded text-xs font-bold whitespace-nowrap ${color}`}>
-      {label}
-    </span>
+    <div className="flex flex-col gap-0.5">
+      <span className={`px-2.5 py-0.5 rounded text-xs font-bold whitespace-nowrap ${color}`}>
+        {label}
+      </span>
+      {originLabel && originLabel !== 'Ninguno' && (
+        <span className="text-[10px] text-gray-400 leading-tight">{originLabel}</span>
+      )}
+    </div>
   )
 }
 
@@ -209,165 +163,152 @@ function KpiCard({ label, value, color = 'text-gray-700', highlight, muted }: {
   )
 }
 
+// ── Frescura Banner ──
+
+function FreshnessBanner({ freshness }: { freshness: CanonicalFreshness | null }) {
+  if (!freshness) return null
+  const statusColor =
+    freshness.freshness_status === 'ok' ? 'bg-green-50 border-green-200 text-green-700' :
+    freshness.freshness_status === 'warning' ? 'bg-yellow-50 border-yellow-200 text-yellow-700' :
+    'bg-red-50 border-red-200 text-red-700'
+  return (
+    <div className={`rounded border px-3 py-1.5 text-xs flex items-center gap-3 ${statusColor}`}>
+      <span className="font-semibold">Fuente: module_ct_cabinet_drivers</span>
+      <span>·</span>
+      <span>Ultimo hire_date: {freshness.source_max_hire_date || '—'}</span>
+      <span>·</span>
+      <span>Atraso: {freshness.data_lag_days != null ? `${freshness.data_lag_days} dias` : '—'}</span>
+      <span>·</span>
+      <span className="uppercase font-bold">{freshness.freshness_status}</span>
+    </div>
+  )
+}
+
 // ── Motivo renderer ──
 
 const MOTIVO_COLORS: Record<string, string> = {
-  'Sin driver ID': 'text-red-600 font-medium',
-  'Sin activación': 'text-red-600 font-medium',
-  'Duplicado': 'text-red-600 font-medium',
-  'Sin scout': 'text-red-600 font-medium',
-  'Revisión manual': 'text-orange-600 font-medium',
-  'Mínimo scout no alcanzado': 'text-orange-600 font-medium',
+  'Sin scout': 'text-yellow-600 font-medium',
+  'Sin activacion': 'text-red-600 font-medium',
   'Ya pagado antes': 'text-teal-600 font-medium',
-  'Estado no elegible': 'text-red-600 font-medium',
-  'Sin monto': 'text-gray-500',
-  'Regla no alcanzada': 'text-gray-500',
+  'Historico': 'text-teal-600 font-medium',
+  'Revision manual': 'text-orange-600 font-medium',
+  'Corte': 'text-blue-600 font-medium',
 }
 
 // ── Main Component ──
 
 export default function OperationView() {
-  const [summary, setSummary] = useState<OperationSummary | null>(null)
-  const [filters, setFilters] = useState<OperationFilters | null>(null)
-  const [data, setData] = useState<AffiliationsResponse | null>(null)
+  const [data, setData] = useState<CanonicalSnapshotResponse | null>(null)
+  const [diagnostic, setDiagnostic] = useState<OperationDiagnosticResponse | null>(null)
   const [loading, setLoading] = useState(true)
-  const [kpiLoading, setKpiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [weekIso, setWeekIso] = useState('')
-  const [scoutId, setScoutId] = useState('')
   const [origin, setOrigin] = useState('')
-  const [alertLevel, setAlertLevel] = useState('')
-  const [onlyManualReview, setOnlyManualReview] = useState(false)
-  const [onlyWithoutDriver, setOnlyWithoutDriver] = useState(false)
-  const [onlyPaid, setOnlyPaid] = useState(false)
   const [lifecycleFilter, setLifecycleFilter] = useState('')
   const [paymentFilter, setPaymentFilter] = useState('')
   const [page, setPage] = useState(0)
   const PAGE_SIZE = 50
 
-  const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [detail, setDetail] = useState<any>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const f = await getOperationFilters()
-        setFilters(f)
-        setWeekIso(f.default_week_iso || '')
-      } catch (e: any) {
-        setError('Error al cargar filtros')
-      }
-    })()
-  }, [])
-
-  const loadSummary = useCallback(async () => {
-    setKpiLoading(true)
-    try {
-      const p: Record<string, any> = {}
-      if (weekIso) p.week_iso = weekIso
-      if (scoutId) p.scout_id = scoutId
-      if (origin) p.origin = origin
-      if (onlyManualReview) p.only_manual_review = true
-      if (onlyPaid) p.only_paid = true
-      if (onlyWithoutDriver) p.only_without_driver = true
-      if (lifecycleFilter) p.lifecycle = lifecycleFilter
-      if (paymentFilter) p.payment_status = paymentFilter
-      setSummary(await getOperationSummary(Object.keys(p).length ? p : undefined as any))
-    } catch { /* ignore */ }
-    finally { setKpiLoading(false) }
-  }, [weekIso, scoutId, origin, onlyManualReview, onlyPaid, onlyWithoutDriver, lifecycleFilter, paymentFilter])
+  const [selectedRow, setSelectedRow] = useState<CanonicalDriver | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const params: Record<string, any> = { limit: PAGE_SIZE, offset: page * PAGE_SIZE }
-      if (weekIso) params.week_iso = weekIso
-      if (scoutId) params.scout_id = scoutId
       if (origin) params.origin = origin
-      if (alertLevel) params.alert_level = alertLevel
-      if (onlyManualReview) params.only_manual_review = true
-      if (onlyWithoutDriver) params.only_without_driver = true
-      if (onlyPaid) params.only_paid = true
-      if (lifecycleFilter) params.lifecycle = lifecycleFilter
-      if (paymentFilter) params.payment_status = paymentFilter
-      const d = await getAffiliations(params)
+      if (lifecycleFilter) {
+        if (lifecycleFilter === 'sin_scout') params.attribution_status = 'unassigned'
+        else if (lifecycleFilter === 'payable') params.payment_status = 'payable'
+        else if (lifecycleFilter === 'paid') params.payment_status = 'paid'
+        else if (lifecycleFilter === 'no_payable') params.payment_status = 'not_payable'
+      }
+      if (paymentFilter) {
+        if (paymentFilter === 'paid') params.payment_status = 'paid'
+        else if (paymentFilter === 'payable') params.payment_status = 'payable'
+        else if (paymentFilter === 'no_payable') params.payment_status = 'not_payable'
+      }
+      const [d, diag] = await Promise.all([
+        getCanonicalOperation(params),
+        getOperationDiagnostic(),
+      ])
       setData(d)
+      setDiagnostic(diag)
     } catch (e: any) {
       setError(e.response?.data?.detail || e.message || 'Error')
     } finally {
       setLoading(false)
     }
-  }, [weekIso, scoutId, origin, alertLevel, onlyManualReview, onlyWithoutDriver, onlyPaid, lifecycleFilter, paymentFilter, page])
+  }, [origin, lifecycleFilter, paymentFilter, page])
 
-  useEffect(() => { loadData(); loadSummary() }, [loadData, loadSummary])
-
-  const sortedItems = useMemo(() => {
-    if (!data) return []
-    const items = [...data.items]
-    items.sort((a, b) => {
-      const w = (b.iso_week_label || '').localeCompare(a.iso_week_label || '')
-      if (w !== 0) return w
-      const h = (b.hire_date || '').localeCompare(a.hire_date || '')
-      return h
-    })
-    return items
-  }, [data])
+  useEffect(() => { loadData() }, [loadData])
 
   const displayItems = useMemo(() => {
-    let items = sortedItems
-    if (lifecycleFilter) items = items.filter(row => deriveLifecycle(row) === lifecycleFilter)
-    if (paymentFilter) items = items.filter(row => derivePayment(row).status === paymentFilter)
+    if (!data) return []
+    let items = [...data.items]
+    if (lifecycleFilter && lifecycleFilter !== 'sin_scout' && lifecycleFilter !== 'payable' && lifecycleFilter !== 'paid' && lifecycleFilter !== 'no_payable') {
+      items = items.filter(row => deriveLifecycle(row) === lifecycleFilter)
+    }
+    if (paymentFilter && lifecycleFilter !== 'payable' && lifecycleFilter !== 'paid' && lifecycleFilter !== 'no_payable') {
+      items = items.filter(row => derivePayment(row).status === paymentFilter)
+    }
     return items
-  }, [sortedItems, lifecycleFilter, paymentFilter])
+  }, [data, lifecycleFilter, paymentFilter])
 
-  async function openDetail(rowId: number) {
-    setSelectedId(rowId)
-    setDetailLoading(true)
-    try { setDetail(await getAffiliationDetail(rowId)) }
-    catch { setDetail(null) }
-    finally { setDetailLoading(false) }
-  }
+  // Compute summary KPIs from diagnostic + snapshot
+  const kpis = useMemo(() => ({
+    total: data?.total ?? 0,
+    withScout: diagnostic?.base_counts.drivers_with_scout ?? 0,
+    withoutScout: diagnostic?.base_counts.drivers_without_scout ?? 0,
+    activated: diagnostic?.trip_metrics.activated_1plus_7d ?? 0,
+    converted5v7d: diagnostic?.trip_metrics.converted_5v7d ?? 0,
+    converted5v14d: diagnostic?.trip_metrics.converted_5v14d ?? 0,
+    paidTotal: diagnostic?.payment_metrics.paid_history_total ?? 0,
+    paidCutoff: diagnostic?.payment_metrics.paid_cutoff_engine ?? 0,
+    paidHistorical: diagnostic?.payment_metrics.paid_historical_upload ?? 0,
+    notPayable: diagnostic?.payment_metrics.not_payable_with_activation ?? 0,
+  }), [data, diagnostic])
 
   function clearFilters() {
-    setWeekIso(filters?.default_week_iso || '')
-    setScoutId(''); setOrigin(''); setAlertLevel('')
-    setOnlyManualReview(false); setOnlyWithoutDriver(false); setOnlyPaid(false)
-    setLifecycleFilter(''); setPaymentFilter('')
+    setOrigin('')
+    setLifecycleFilter('')
+    setPaymentFilter('')
     setPage(0)
   }
 
   function applyPreset(preset: string) {
-    setWeekIso(filters?.default_week_iso || '')
-    setScoutId(''); setOrigin(''); setAlertLevel('')
-    setOnlyManualReview(false); setOnlyWithoutDriver(false); setOnlyPaid(false)
-    setLifecycleFilter(''); setPaymentFilter('')
+    setOrigin('')
+    setPaymentFilter('')
 
     switch (preset) {
-      case 'no_driver_id': setOnlyWithoutDriver(true); break
-      case 'no_trips': setLifecycleFilter('no_trips'); break
-      case 'activated': setLifecycleFilter('activated'); break
-      case 'converted_5v7d': setLifecycleFilter('converted_5v7d'); break
-      case 'converted_5v14d': setLifecycleFilter('converted_5v14d'); break
-      case 'payable': setPaymentFilter('payable'); break
-      case 'paid': setOnlyPaid(true); break
-      case 'no_payable': setPaymentFilter('no_payable'); break
-      case 'revisar': setPaymentFilter('revisar'); break
-      case 'manual_review': setOnlyManualReview(true); break
+      case 'sin_scout':
+      case 'no_trips':
+      case 'activated':
+      case 'converted_5v7d':
+      case 'converted_5v14d':
+        setLifecycleFilter(preset)
+        break
+      case 'payable':
+      case 'paid':
+      case 'no_payable':
+      case 'revisar':
+        setPaymentFilter(preset)
+        setLifecycleFilter('')
+        break
     }
     setPage(0)
   }
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0
-  const noDataCurrentWeek = filters && !filters.has_data_for_current_week && weekIso === filters.current_iso_week && data && data.total === 0
-  const activePreset =
-    (onlyManualReview && 'manual_review') ||
-    (onlyWithoutDriver && 'no_driver_id') ||
-    (onlyPaid && 'paid') ||
-    (lifecycleFilter || '') ||
-    (paymentFilter || '')
+  const activePreset = lifecycleFilter || paymentFilter || ''
+
+  // Origins from data
+  const origins = useMemo(() => {
+    if (!diagnostic) return []
+    const seen = new Set<string>()
+    data?.items?.forEach(r => { if (r.origin) seen.add(r.origin) })
+    return Array.from(seen).sort()
+  }, [data])
 
   return (
     <div className="flex flex-col h-full" style={{ minHeight: 'calc(100vh - 140px)' }}>
@@ -376,66 +317,42 @@ export default function OperationView() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-gray-800">Operacion de Afiliaciones</h2>
-            {summary && (
-              <p className="text-xs text-gray-400 mt-0.5">
-                {summary.scope_type === 'selected_week'
-                  ? `Resumen de ${summary.scope_label}`
-                  : 'Resumen de todas las semanas'}
-                {data ? ` \u00b7 ${data.total} registros` : ''}
-              </p>
-            )}
+            <p className="text-xs text-gray-400 mt-0.5">
+              Fuente: module_ct_cabinet_drivers
+              {data ? ` \u00b7 ${data.total} registros` : ''}
+            </p>
           </div>
-          {filters && !filters.has_data_for_current_week && (
-            <button
-              onClick={() => { setWeekIso(filters.latest_iso_week_with_data || weekIso); setPage(0) }}
-              className="text-xs text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1 rounded border border-blue-200"
-            >
-              Ver ultima semana con data: {filters.latest_iso_week_with_data_label}
-            </button>
-          )}
         </div>
 
-        {/* KPIs — Primary row: funnel ejecutivo */}
-        {summary && (
-          <div className="grid grid-cols-7 gap-1.5">
-            <KpiCard label="Afiliados" value={summary.total_affiliations} />
-            <KpiCard label="Activados" value={((summary as any).total_activated ?? summary.total_with_driver)} color="text-green-600" />
-            <KpiCard label="5V / 7D" value={((summary as any).total_5v7d ?? (summary as any).total_converted_5v7d ?? '—')} color="text-blue-600" highlight />
-            <KpiCard label="Conversion" value={((summary as any).total_converted_5v7d && summary.total_affiliations ? Math.round((summary as any).total_converted_5v7d / summary.total_affiliations * 100) + '%' : '—')} color="text-blue-500" />
-            <KpiCard label="Pagables" value={((summary as any).total_payable ?? '—')} color="text-emerald-600" />
-            <KpiCard label="Pagados" value={summary.total_paid_history} color="text-teal-600" />
-            <KpiCard label="Monto" value={`S/ ${summary.total_paid_amount.toLocaleString()}`} color="text-gray-700" />
-          </div>
-        )}
+        {/* Freshness */}
+        <FreshnessBanner freshness={data?.freshness ?? null} />
+
+        {/* KPIs — Primary row */}
+        <div className="grid grid-cols-8 gap-1.5">
+          <KpiCard label="Total" value={kpis.total} />
+          <KpiCard label="Con scout" value={kpis.withScout} color="text-green-600" />
+          <KpiCard label="Sin scout" value={kpis.withoutScout} color="text-yellow-600" highlight />
+          <KpiCard label="Activados" value={kpis.activated} color="text-green-600" />
+          <KpiCard label="5V / 7D" value={kpis.converted5v7d} color="text-blue-600" highlight />
+          <KpiCard label="5V / 14D" value={kpis.converted5v14d} color="text-purple-600" />
+          <KpiCard label="Pagados" value={kpis.paidTotal} color="text-teal-600" />
+          <KpiCard label="No pagables" value={kpis.notPayable} color="text-gray-500" muted />
+        </div>
 
         {/* KPIs — Secondary row */}
-        {summary && (
-          <div className="grid grid-cols-4 gap-1.5">
-            <KpiCard label="Sin driver" value={summary.total_without_driver} color="text-yellow-600" muted />
-            <KpiCard label="Bloqueos" value={summary.total_blocks_future} color="text-purple-600" muted />
-            <KpiCard label="Manual review" value={summary.total_manual_review} color="text-orange-600" muted />
-            <KpiCard label="Criticas" value={summary.total_alerts_critical} color={summary.total_alerts_critical > 0 ? 'text-red-600' : 'text-green-600'} muted />
-          </div>
-        )}
+        <div className="grid grid-cols-4 gap-1.5">
+          <KpiCard label="Pago corte" value={kpis.paidCutoff} color="text-blue-500" muted />
+          <KpiCard label="Pago historico" value={kpis.paidHistorical} color="text-teal-500" muted />
+          <KpiCard label="Conflictos" value={diagnostic?.attribution_quality.assignment_conflicts ?? 0}
+            color={(diagnostic?.attribution_quality.assignment_conflicts ?? 0) > 0 ? 'text-red-600' : 'text-green-600'} muted />
+          <KpiCard label="Data lag" value={data?.freshness.data_lag_days != null ? `${data.freshness.data_lag_days}d` : '—'} color="text-gray-500" muted />
+        </div>
 
-        {/* Empty state */}
-        {noDataCurrentWeek && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-2 text-sm text-yellow-700 flex items-center justify-between">
-            <span>No hay afiliaciones en la semana actual ({filters?.current_iso_week_label}).</span>
-            <button
-              onClick={() => { setWeekIso(filters?.latest_iso_week_with_data || ''); setPage(0) }}
-              className="text-blue-600 hover:text-blue-800 font-medium underline text-xs"
-            >
-              Ir a {filters?.latest_iso_week_with_data_label}
-            </button>
-          </div>
-        )}
-
-        {/* Presets — Modos operacionales */}
+        {/* Presets */}
         <div className="flex flex-wrap gap-1.5 items-center">
           <span className="text-xs text-gray-400 uppercase tracking-wider mr-1">Modo:</span>
           {[
-            { key: 'no_driver_id', label: 'Sin ID', color: 'border-red-300 text-red-600 hover:bg-red-50' },
+            { key: 'sin_scout', label: 'Sin scout', color: 'border-yellow-300 text-yellow-600 hover:bg-yellow-50' },
             { key: 'no_trips', label: 'Sin viajes', color: 'border-gray-300 text-gray-500 hover:bg-gray-50' },
             { key: 'activated', label: 'Activados', color: 'border-green-300 text-green-600 hover:bg-green-50' },
             { key: 'converted_5v7d', label: '5V / 7D', color: 'border-blue-300 text-blue-700 hover:bg-blue-50' },
@@ -444,7 +361,6 @@ export default function OperationView() {
             { key: 'paid', label: 'Pagados', color: 'border-teal-300 text-teal-700 hover:bg-teal-50' },
             { key: 'no_payable', label: 'No pagables', color: 'border-gray-300 text-gray-600 hover:bg-gray-50' },
             { key: 'revisar', label: 'Revisar', color: 'border-orange-300 text-orange-600 hover:bg-orange-50' },
-            { key: 'manual_review', label: 'Manual review', color: 'border-yellow-300 text-yellow-600 hover:bg-yellow-50' },
           ].map(p => (
             <button
               key={p.key}
@@ -466,41 +382,16 @@ export default function OperationView() {
         </div>
 
         {/* Filters row */}
-        {filters && (
-          <div className="flex flex-wrap gap-2 items-center bg-white rounded-lg border border-gray-200 px-3 py-1.5">
-            <select value={weekIso} onChange={(e) => { setWeekIso(e.target.value); setPage(0) }}
-              className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
-              <option value="">Todas las semanas</option>
-              {filters.weeks.map((w) => (
-                <option key={w.label} value={`${w.year}-W${String(w.week).padStart(2, '0')}`}>{w.label}</option>
-              ))}
-            </select>
-
-            <select value={scoutId} onChange={(e) => { setScoutId(e.target.value); setPage(0) }}
-              className="border border-gray-200 rounded px-2 py-1 text-xs bg-white max-w-[180px]">
-              <option value="">Todos los scouts</option>
-              {filters.scouts.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-
-            <select value={origin} onChange={(e) => { setOrigin(e.target.value); setPage(0) }}
-              className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
-              <option value="">Todos los origenes</option>
-              {filters.origins.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
-
-            <select value={alertLevel} onChange={(e) => { setAlertLevel(e.target.value); setPage(0) }}
-              className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
-              <option value="">Todas las alertas</option>
-              {filters.alert_types.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-            </select>
-
-            <button onClick={clearFilters} className="text-xs text-blue-600 hover:text-blue-800 ml-auto">
-              Limpiar filtros
-            </button>
-          </div>
-        )}
+        <div className="flex flex-wrap gap-2 items-center bg-white rounded-lg border border-gray-200 px-3 py-1.5">
+          <select value={origin} onChange={(e) => { setOrigin(e.target.value); setPage(0) }}
+            className="border border-gray-200 rounded px-2 py-1 text-xs bg-white">
+            <option value="">Todos los origenes</option>
+            {origins.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <button onClick={clearFilters} className="text-xs text-blue-600 hover:text-blue-800 ml-auto">
+            Limpiar filtros
+          </button>
+        </div>
 
         {/* Error */}
         {error && <div className="bg-red-50 border border-red-200 text-red-700 rounded px-4 py-2 text-sm">{error}</div>}
@@ -510,7 +401,7 @@ export default function OperationView() {
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden flex-1 mt-2 min-h-[300px]">
         {loading ? (
           <div className="flex items-center justify-center h-full text-gray-400 text-sm">Cargando...</div>
-        ) : data && data.items.length === 0 ? (
+        ) : data && displayItems.length === 0 ? (
           <div className="flex items-center justify-center h-full text-gray-400 text-sm">Sin resultados para los filtros actuales</div>
         ) : data ? (
           <div className="flex flex-col h-full">
@@ -533,26 +424,23 @@ export default function OperationView() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {displayItems.map((row: AffiliationRow) => {
+                  {displayItems.map((row: CanonicalDriver) => {
                     const lifecycle = deriveLifecycle(row)
                     const payment = derivePayment(row)
                     const rowBorder = LIFECYCLE_ROW_BORDER[lifecycle] || ''
                     const motivoColor = MOTIVO_COLORS[payment.reason] || 'text-gray-500'
-                    const trip7d = parseInt(row.trips_0_7_count || '0')
-                    const trip14d = parseInt(row.trips_8_14_count || '0')
                     return (
-                      <tr key={row.row_id} onClick={() => openDetail(row.row_id)}
+                      <tr key={row.driver_id} onClick={() => setSelectedRow(row)}
                         className={`hover:bg-blue-50/40 cursor-pointer transition-colors ${rowBorder}`}>
                         <td className="px-3 py-2 whitespace-nowrap">
-                          <div className="font-mono text-xs font-semibold text-gray-700">{row.iso_week_label}</div>
-                          {row.iso_week_start && <div className="text-[11px] text-gray-400">{row.iso_week_start} — {row.iso_week_end}</div>}
+                          <div className="font-mono text-xs font-semibold text-gray-700">{row.iso_week_label || '-'}</div>
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap font-mono text-xs text-gray-600">
                           {row.hire_date ? row.hire_date.slice(0, 10) : '-'}
                         </td>
                         <td className="px-3 py-2 max-w-[160px]">
-                          <div className="font-medium text-gray-800 truncate text-xs" title={row.driver_display_name}>
-                            {row.driver_display_name || '-'}
+                          <div className="font-medium text-gray-800 truncate text-xs" title={row.driver_name}>
+                            {row.driver_name || '-'}
                           </div>
                           <div className="text-[11px] text-gray-400 truncate font-mono" title={row.driver_id || ''}>
                             {row.driver_id ? row.driver_id.slice(0, 14) : '-'}
@@ -560,33 +448,33 @@ export default function OperationView() {
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap text-xs text-gray-600">{row.origin || '-'}</td>
                         <td className="px-3 py-2 max-w-[140px] truncate text-xs" title={row.scout_name || ''}>
-                          {row.scout_name || '-'}
+                          {row.scout_name || (row.attribution_status === 'unassigned' ? 'Sin scout' : '-')}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           <ProgressIcons row={row} />
                         </td>
                         <td className={`px-3 py-2 text-center font-mono text-sm font-bold ${
-                          trip7d >= 5 ? 'text-blue-700 bg-blue-50 rounded' : 'text-gray-500'
+                          row.trips_7d >= 5 ? 'text-blue-700 bg-blue-50 rounded' : 'text-gray-500'
                         }`}>
-                          {row.trips_0_7_count || '0'}
+                          {row.trips_7d}
                         </td>
                         <td className={`px-3 py-2 text-center font-mono text-sm ${
-                          trip14d >= 5 ? 'text-purple-700 font-bold' : 'text-gray-500'
+                          (row.trips_14d - row.trips_7d) >= 5 ? 'text-purple-700 font-bold' : 'text-gray-500'
                         }`}>
-                          {row.trips_8_14_count || '0'}
+                          {row.trips_14d - row.trips_7d}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           <LifecycleBadge status={lifecycle} />
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">
-                          <PaymentBadge status={payment.status} />
+                          <PaymentBadge status={payment.status} originLabel={payment.originLabel} />
                         </td>
                         <td className={`px-3 py-2 text-xs max-w-[160px] truncate ${motivoColor}`} title={payment.reason || ''}>
                           {payment.reason || '\u2014'}
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-sm whitespace-nowrap">
-                          {row.amount_paid
-                            ? <span className={`font-bold ${payment.status === 'paid' ? 'text-teal-700' : payment.status === 'payable' ? 'text-emerald-700' : 'text-gray-700'}`}>S/ {row.amount_paid.toFixed(0)}</span>
+                          {row.amount
+                            ? <span className={`font-bold ${row.payment_status === 'paid' ? 'text-teal-700' : 'text-emerald-700'}`}>S/ {row.amount.toFixed(0)}</span>
                             : <span className="text-gray-300">-</span>
                           }
                         </td>
@@ -612,66 +500,57 @@ export default function OperationView() {
       </div>
 
       {/* Detail Drawer */}
-      {selectedId && (
+      {selectedRow && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/20" onClick={() => setSelectedId(null)} />
+          <div className="absolute inset-0 bg-black/20" onClick={() => setSelectedRow(null)} />
           <div className="relative w-[520px] bg-white shadow-xl border-l border-gray-200 overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-2.5 flex items-center justify-between z-10">
-              <h3 className="font-semibold text-gray-800 text-sm">Detalle #{selectedId}</h3>
-              <button onClick={() => setSelectedId(null)} className="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
+              <h3 className="font-semibold text-gray-800 text-sm">Detalle Driver</h3>
+              <button onClick={() => setSelectedRow(null)} className="text-gray-400 hover:text-gray-600 text-lg">&times;</button>
             </div>
             <div className="p-4 space-y-3">
-              {detailLoading ? <div className="text-center text-gray-400 py-8 text-sm">Cargando...</div> : detail ? (
-                <>
-                  <Section title="Afiliacion">
-                    <F label="Row" value={detail.row_id} />
-                    <F label="Batch" value={detail.batch_id} />
-                    <F label="Sheet / Row" value={`${detail.source_sheet || '-'} / ${detail.source_row || '-'}`} />
-                    <F label="ISO Week" value={detail.iso_week_label_full || '-'} />
-                    <F label="Hire Date" value={detail.hire_date || detail.source_hire_date || '-'} />
-                    <F label="Origen" value={detail.origin_raw || detail.source_origin || '-'} />
-                  </Section>
-                  <Section title="Driver">
-                    <F label="Nombre" value={detail.driver_display_name || 'Sin nombre'} bold />
-                    <F label="Driver ID" value={detail.driver_id_resolved || 'No resuelto'} mono />
-                    <F label="Licencia" value={detail.driver_license_raw || '-'} mono />
-                    <F label="Nombre raw" value={detail.driver_name_raw || '-'} />
-                  </Section>
-                  <Section title="Scout">
-                    <F label="Scout (raw)" value={detail.scout_name_raw || '-'} />
-                    <F label="Scout (resuelto)" value={detail.scout_resolved_name || 'No resuelto'} />
-                    <F label="Supervisor" value={detail.supervisor_raw || '-'} />
-                    <F label="Sup. resuelto" value={detail.supervisor_resolved_name || '-'} />
-                  </Section>
-                  <Section title="Pago">
-                    <F label="Monto" value={detail.amount_paid ? `S/ ${detail.amount_paid}` : '-'} bold />
-                    <F label="Regla" value={detail.payment_rule_raw || '-'} />
-                    <F label="Estado raw" value={detail.estado_pago_raw || '-'} />
-                    <F label="Esquema" value={detail.payment_scheme_raw || '-'} />
-                    <F label="Hito" value={detail.milestone_raw || '-'} />
-                  </Section>
-                  <Section title="Paid History">
-                    <F label="PH ID" value={detail.paid_history_id || 'No creado'} />
-                    <F label="PH Amount" value={detail.ph_amount_paid ? `S/ ${detail.ph_amount_paid}` : '-'} />
-                    <F label="Blocks Future" value={detail.ph_blocks_future === true ? 'Si' : detail.ph_blocks_future === false ? 'No' : '-'} />
-                    <F label="Resolution" value={detail.ph_resolution_status || '-'} />
-                    <F label="Hash" value={detail.ph_unique_hash ? detail.ph_unique_hash.slice(0, 16) + '...' : '-'} mono />
-                  </Section>
-                  <Section title="Clasificacion">
-                    <F label="Atribucion" value={detail.attribution_status || '-'} />
-                    <F label="Attr. Reason" value={detail.attribution_reason || '-'} />
-                    <F label="Pago Financiero" value={detail.payment_financial_status || '-'} />
-                    <F label="Pago Blocking" value={detail.payment_blocking_status || '-'} />
-                    <F label="Blocking Display" value={detail.blocking_display || '-'} />
-                    <F label="Blocks Future" value={detail.blocks_future_payment === true ? 'Si' : detail.blocks_future_payment === false ? 'No' : '-'} />
-                    <F label="Final Status" value={detail.final_status || '-'} />
-                  </Section>
-                  <Section title="Alertas">
-                    <F label="Alert Level" value={detail.alert_level || '-'} />
-                    <F label="Alert Codes" value={detail.alert_codes ? detail.alert_codes.join(', ') : '-'} />
-                  </Section>
-                </>
-              ) : <div className="text-center text-gray-400 py-8 text-sm">Sin datos</div>}
+              <Section title="Identidad">
+                <F label="Driver ID" value={selectedRow.driver_id} mono />
+                <F label="Nombre" value={selectedRow.driver_name} bold />
+                <F label="Licencia" value={selectedRow.license} mono />
+                <F label="Hire Date" value={selectedRow.hire_date} />
+                <F label="Semana ISO" value={selectedRow.iso_week_label} />
+                <F label="Origen" value={selectedRow.origin} />
+                <F label="City" value={selectedRow.city} />
+                <F label="Country" value={selectedRow.country} />
+              </Section>
+              <Section title="Scout">
+                <F label="Scout" value={selectedRow.scout_name || 'Sin scout'} />
+                <F label="Scout ID" value={selectedRow.scout_id} />
+                <F label="Supervisor" value={selectedRow.supervisor_name} />
+                <F label="Atribucion" value={selectedRow.attribution_status} />
+              </Section>
+              <Section title="Viajes Reales (trips_2025/trips_2026)">
+                <F label="Viajes 7D" value={selectedRow.trips_7d} bold />
+                <F label="Viajes 14D" value={selectedRow.trips_14d} bold />
+                <F label="Activado" value={selectedRow.activated_flag ? 'Si' : 'No'} />
+                <F label="5V / 7D" value={selectedRow.converted_5v7d ? 'Si' : 'No'} />
+                <F label="5V / 14D" value={selectedRow.converted_5v14d ? 'Si' : 'No'} />
+                <F label="Lifecycle" value={selectedRow.driver_lifecycle_status} />
+              </Section>
+              <Section title="Pago">
+                <F label="Estado" value={selectedRow.payment_status} bold />
+                <F label="Origen" value={PAYMENT_ORIGIN_LABELS[selectedRow.payment_origin] || selectedRow.payment_origin} />
+                <F label="Monto" value={selectedRow.amount ? `S/ ${selectedRow.amount}` : '-'} bold />
+                <F label="Regla" value={selectedRow.payment_rule_label} />
+                <F label="Evidencia" value={selectedRow.payment_evidence_label} />
+                <F label="Paid History ID" value={selectedRow.paid_history_id} />
+              </Section>
+              <Section title="Motivo">
+                <F label="Razon" value={selectedRow.reason} bold />
+              </Section>
+              <Section title="Fuente">
+                <F label="Legacy viajes_0_7" value={selectedRow.legacy_viajes_0_7 ? 'Si' : 'No'} />
+                <F label="Legacy viajes_8_14" value={selectedRow.legacy_viajes_8_14 ? 'Si' : 'No'} />
+                <F label="Total Orders" value={selectedRow.total_orders} />
+                <F label="Driver Status" value={selectedRow.source_driver_status} />
+                <F label="Actualizado" value={selectedRow.source_updated_at} />
+              </Section>
             </div>
           </div>
         </div>

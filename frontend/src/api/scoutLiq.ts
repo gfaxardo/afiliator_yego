@@ -565,6 +565,129 @@ export async function getAffiliationDetail(rowId: number): Promise<any> {
   return data
 }
 
+// ── Canonical Operation ──
+
+export interface CanonicalDriver {
+  driver_id: string | null
+  driver_name: string
+  license: string | null
+  hire_date: string | null
+  iso_week: string | null
+  iso_week_label: string | null
+  origin: string | null
+  city: string | null
+  country: string | null
+  scout_id: number | null
+  scout_name: string | null
+  supervisor_name: string | null
+  attribution_status: string
+  trips_7d: number
+  trips_14d: number
+  activated_flag: boolean
+  converted_5v7d: boolean
+  converted_5v14d: boolean
+  driver_lifecycle_status: string
+  legacy_viajes_0_7: boolean | null
+  legacy_viajes_8_14: boolean | null
+  total_orders: number | null
+  payment_status: string
+  payment_origin: string
+  payment_rule_label: string | null
+  payment_evidence_label: string | null
+  payment_trace_status: string | null
+  payment_trace_warning: string | null
+  payment_basis_label: string | null
+  amount: number | null
+  paid_history_id: number | null
+  reason: string
+  counts_as_activated_base: boolean
+  counts_as_quality_5v7d: boolean
+  counts_for_payment: boolean
+  scout_activated_base: number
+  scout_quality_5v7d: number
+  scout_conversion_rate_5v7d: number
+  scout_tier_amount: number
+  scout_tier_threshold: number
+  payment_formula_label: string | null
+  source_driver_status: string | null
+  source_updated_at: string | null
+}
+
+export interface CanonicalFreshness {
+  source_max_hire_date: string | null
+  data_lag_days: number | null
+  source_max_updated_at: string | null
+  source_max_created_at: string | null
+  total_source_rows: number | null
+  null_invalid_driver_id_count: number | null
+  null_hire_date_count: number | null
+  freshness_status: string
+}
+
+export interface CanonicalSnapshotResponse {
+  total: number
+  limit: number
+  offset: number
+  items: CanonicalDriver[]
+  freshness: CanonicalFreshness
+}
+
+export interface OperationDiagnosticResponse {
+  source_table: string
+  filters_applied: Record<string, any>
+  base_counts: {
+    total_source_drivers: number
+    drivers_with_scout: number
+    drivers_without_scout: number
+    null_invalid_driver_id: number
+  }
+  trip_metrics: {
+    activated_1plus_7d: number
+    converted_5v7d: number
+    converted_5v14d: number
+  }
+  payment_metrics: {
+    paid_history_total: number
+    paid_cutoff_engine: number
+    paid_historical_upload: number
+    not_payable_with_activation: number
+  }
+  freshness: {
+    source_max_hire_date: string | null
+    source_max_updated_at: string | null
+    source_max_created_at: string | null
+    data_lag_days: number | null
+    freshness_status: string
+  }
+  attribution_quality: {
+    assignment_conflicts: number
+  }
+}
+
+export async function getCanonicalOperation(params?: {
+  hire_date_from?: string
+  hire_date_to?: string
+  origin?: string
+  scout_id?: number
+  attribution_status?: string
+  payment_status?: string
+  limit?: number
+  offset?: number
+}): Promise<CanonicalSnapshotResponse> {
+  const { data } = await api.get('/operation/canonical', { params })
+  return data
+}
+
+export async function getOperationDiagnostic(params?: {
+  hire_date_from?: string
+  hire_date_to?: string
+  origin?: string
+  scout_id?: number
+}): Promise<OperationDiagnosticResponse> {
+  const { data } = await api.get('/operation/diagnostic', { params })
+  return data
+}
+
 export function getHistoricalErrorsUrl(batchId: number): string {
   return `${api.defaults.baseURL}/historical-imports/${batchId}/errors.csv`
 }

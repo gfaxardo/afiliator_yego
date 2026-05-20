@@ -80,6 +80,10 @@ from app.services.operation_service import (
     get_affiliations, get_affiliation_detail, get_operation_summary,
     get_operation_filters, export_affiliations_csv,
 )
+from app.services.canonical_operation_service import (
+    get_canonical_operation_snapshot,
+    get_operation_diagnostic,
+)
 from app.services.dashboard_service import (
     get_dashboard_overview, get_dashboard_by_scout, get_dashboard_by_week,
     get_dashboard_quality_funnel, get_dashboard_alerts, get_cutoff_trend,
@@ -107,6 +111,8 @@ from app.schemas.scout_liq import (
     ManualPaymentApprove,
     ScoutBonusCreate,
     ScoutBonusApprove,
+    CanonicalOperationSnapshotResponse,
+    OperationDiagnosticResponse,
 )
 
 router = APIRouter(prefix="/scout-liq", tags=["scout-liq"])
@@ -2021,6 +2027,57 @@ def operation_export(
         content=csv_data,
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=afiliaciones.csv"},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CANONICAL OPERATION — Fuente maestra module_ct_cabinet_drivers
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/operation/canonical", response_model=CanonicalOperationSnapshotResponse)
+def operation_canonical_snapshot(
+    hire_date_from: Optional[date] = Query(None),
+    hire_date_to: Optional[date] = Query(None),
+    origin: Optional[str] = Query(None),
+    scout_id: Optional[int] = Query(None),
+    attribution_status: Optional[str] = Query(None),
+    payment_status: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """
+    Canonical operation snapshot desde module_ct_cabinet_drivers.
+    Incluye todos los drivers (con y sin scout), viajes reales desde
+    trips_2025/trips_2026, pago como overlay (cutoff + historical),
+    y metadata de frescura.
+    """
+    return get_canonical_operation_snapshot(
+        db,
+        hire_date_from=hire_date_from,
+        hire_date_to=hire_date_to,
+        origin=origin,
+        scout_id=scout_id,
+        attribution_status=attribution_status,
+        payment_status=payment_status,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/operation/diagnostic", response_model=OperationDiagnosticResponse)
+def operation_diagnostic(
+    hire_date_from: Optional[date] = Query(None),
+    hire_date_to: Optional[date] = Query(None),
+    origin: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Diagnostico liviano: total drivers, con/sin scout, data lag, conflictos. NO calcula trips."""
+    return get_operation_diagnostic(
+        db,
+        hire_date_from=hire_date_from,
+        hire_date_to=hire_date_to,
+        origin=origin,
     )
 
 
