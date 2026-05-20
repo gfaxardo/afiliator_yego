@@ -4,6 +4,7 @@ import { Outlet, NavLink, useLocation } from 'react-router-dom'
 const MAIN_TABS = [
   { to: '/scout-liq/operation', label: 'Operacion' },
   { to: '/scout-liq/dashboard', label: 'Dashboard' },
+  { to: '/scout-liq/configuracion', label: 'Configuracion' },
 ]
 
 const ADVANCED_TABS = [

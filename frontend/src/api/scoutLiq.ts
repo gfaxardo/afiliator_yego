@@ -1157,3 +1157,134 @@ export async function getCutoffTrend(): Promise<TrendItem[]> {
   const { data } = await api.get('/dashboard/trend')
   return data
 }
+
+// ── Payment Scheme Admin ──
+
+export interface PaymentSchemeListItem {
+  scheme_id: number
+  name: string
+  scheme_type: string
+  description: string | null
+  is_active: boolean
+  active_version_id: number | null
+  active_version_name: string | null
+  active_since_cohort: string | null
+  version_count: number
+  created_at: string | null
+}
+
+export interface SchemeVersionDetail {
+  version_id: number
+  version_name: string
+  valid_from_cohort_iso_week: string
+  valid_to_cohort_iso_week: string | null
+  maturity_days: number
+  min_activated: number
+  activation_rule: string
+  quality_rule: string
+  formula_type: string
+  currency: string
+  status: string
+  created_at: string | null
+  activated_at: string | null
+  archived_at: string | null
+  tiers: { min_conversion_rate: number; payout_amount: number; sort_order: number }[]
+}
+
+export interface PaymentSchemeDetail {
+  scheme_id: number
+  name: string
+  scheme_type: string
+  description: string | null
+  is_active: boolean
+  created_at: string | null
+  versions: SchemeVersionDetail[]
+}
+
+export interface CreateVersionPayload {
+  version_name: string
+  valid_from_cohort_iso_week: string
+  maturity_days: number
+  min_activated: number
+  activation_rule: string
+  quality_rule: string
+  formula_type: string
+  currency: string
+  tiers: { min_conversion_rate: number; payout_amount: number }[]
+}
+
+export interface HistoryItem {
+  version_id: number
+  scheme_name: string
+  scheme_type: string
+  version_name: string
+  valid_from_cohort_iso_week: string
+  valid_to_cohort_iso_week: string | null
+  maturity_days: number
+  min_activated: number
+  status: string
+  created_at: string | null
+  activated_at: string | null
+  archived_at: string | null
+}
+
+export async function listPaymentSchemes(): Promise<PaymentSchemeListItem[]> {
+  const { data } = await api.get('/payment-schemes')
+  return data
+}
+
+export async function getPaymentSchemeDetail(schemeId: number): Promise<PaymentSchemeDetail> {
+  const { data } = await api.get(`/payment-schemes/${schemeId}`)
+  return data
+}
+
+export async function createPaymentScheme(body: { name: string; scheme_type: string; description?: string }): Promise<any> {
+  const { data } = await api.post('/payment-schemes', body)
+  return data
+}
+
+export async function createPaymentSchemeVersion(
+  schemeId: number,
+  body: CreateVersionPayload
+): Promise<any> {
+  const { data } = await api.post(`/payment-schemes/${schemeId}/versions`, body)
+  return data
+}
+
+export async function activatePaymentSchemeVersion(versionId: number): Promise<any> {
+  const { data } = await api.post(`/payment-scheme-versions/${versionId}/activate`)
+  return data
+}
+
+export async function archivePaymentSchemeVersion(versionId: number): Promise<any> {
+  const { data } = await api.post(`/payment-scheme-versions/${versionId}/archive`)
+  return data
+}
+
+export async function getPaymentSchemesHistory(): Promise<HistoryItem[]> {
+  const { data } = await api.get('/payment-schemes/history')
+  return data
+}
+
+export interface ResolvedScheme {
+  scheme_id: number
+  scheme_name: string
+  scheme_type: string
+  description: string | null
+  scheme_version_id: number
+  version_name: string
+  valid_from_cohort_iso_week: string
+  valid_to_cohort_iso_week: string | null
+  maturity_days: number
+  min_activated: number
+  activation_rule: string
+  quality_rule: string
+  formula_type: string
+  currency: string
+  tiers: { min_conversion_rate: number; payout_amount: number; sort_order: number }[]
+}
+
+export async function resolvePaymentScheme(cohort_iso_week: string, scheme_type: string): Promise<ResolvedScheme> {
+  const { data } = await api.get('/payment-schemes/resolve', { params: { cohort_iso_week, scheme_type } })
+  return data
+}

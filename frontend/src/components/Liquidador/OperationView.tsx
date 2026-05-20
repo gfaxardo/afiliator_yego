@@ -3,6 +3,7 @@ import {
   getCanonicalOperation, getOperationDiagnostic,
   type CanonicalDriver, type CanonicalSnapshotResponse,
   type CanonicalFreshness, type OperationDiagnosticResponse,
+  resolvePaymentScheme, type ResolvedScheme,
 } from '../../api/scoutLiq'
 
 // ── LIFECYCLE desde datos canonicos ──
@@ -30,6 +31,102 @@ const LIFECYCLE_ROW_BORDER: Record<string, string> = {
   converted_5v7d: 'border-l-4 border-l-blue-400',
   converted_5v14d: 'border-l-4 border-l-purple-400',
   activated: 'border-l-4 border-l-green-400',
+}
+
+// ── TRACE STATUS translations ──
+
+const RULE_LABELS: Record<string, string> = {
+  '1V7D': '1 viaje en 7 días',
+  '5V7D': '5 viajes en 7 días',
+  '50V30D': '50 viajes en 30 días',
+}
+
+const FORMULA_LABELS: Record<string, string> = {
+  'ACTIVATED_X_TIER': 'Activados × Tier',
+  'QUALITY_X_FIXED': 'Calidad × Fijo',
+}
+
+const TRACE_STATUS_LABELS: Record<string, string> = {
+  blocked_unassigned: 'Sin scout asignado',
+  no_activation: 'Sin activación',
+  blocked_min_activated: 'Mínimo de activados no alcanzado',
+  blocked_no_tier: 'No alcanzó tier',
+  payable_scout_tier: 'Pagable: scout alcanzó tier',
+  paid_confirmed: 'Ya pagado',
+  ok: 'OK',
+}
+
+const TRACE_STATUS_COLORS: Record<string, string> = {
+  blocked_unassigned: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+  no_activation: 'bg-red-100 text-red-700 border-red-200',
+  blocked_min_activated: 'bg-orange-100 text-orange-700 border-orange-200',
+  blocked_no_tier: 'bg-orange-100 text-orange-700 border-orange-200',
+  payable_scout_tier: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  paid_confirmed: 'bg-teal-100 text-teal-700 border-teal-200',
+  ok: 'bg-gray-100 text-gray-600 border-gray-200',
+}
+
+const REASON_LABELS: Record<string, string> = {
+  no_scout: 'Sin scout',
+  no_activation: 'Sin activación',
+  already_paid: 'Ya pagado',
+  min_activated_not_reached: 'Mínimo de activados no alcanzado',
+  tier_not_reached: 'No alcanzó tier',
+  manual_review: 'Revisión manual',
+  ok: 'Pagable',
+}
+
+// ── Compact badges ──
+
+function BoolBadge({ value }: { value: boolean }) {
+  return (
+    <span className={`inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+      value ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-50 text-gray-300 border-gray-200'
+    }`}>
+      {value ? 'Sí' : 'No'}
+    </span>
+  )
+}
+
+function TraceStatusBadge({ status }: { status: string | null }) {
+  if (!status) return <span className="text-gray-300 text-[10px]">—</span>
+  const label = TRACE_STATUS_LABELS[status] || status
+  const color = TRACE_STATUS_COLORS[status] || 'bg-gray-100 text-gray-500 border-gray-200'
+  return (
+    <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border whitespace-nowrap ${color}`}>
+      {label}
+    </span>
+  )
+}
+
+function buildEvidence(row: CanonicalDriver): string {
+  if (row.payment_status === 'paid') {
+    return `Ya pagado (${row.payment_origin || 'histórico'})`
+  }
+  if (row.scout_id == null || row.attribution_status === 'unassigned') {
+    return 'Sin scout asignado'
+  }
+  if (!row.activated_flag) {
+    return 'Sin activación (0 viajes 7D)'
+  }
+  const base = row.scout_activated_base
+  const quality = row.scout_quality_5v7d
+  const rate = (row.scout_conversion_rate_5v7d * 100).toFixed(0)
+  const amount = row.scout_tier_amount
+  if (amount > 0) {
+    return `Scout ${quality}/${base} = ${rate}% \u2192 S/${amount.toFixed(0)}`
+  }
+  if (row.reason === 'min_activated_not_reached') {
+    return `Scout ${quality}/${base} = ${rate}% — mínimo no alcanzado (base: ${base})`
+  }
+  return `Scout ${quality}/${base} = ${rate}% — sin tier`
+}
+
+function buildRegla(row: CanonicalDriver): string {
+  if (row.scout_tier_amount > 0) {
+    return `Tier S/${row.scout_tier_amount.toFixed(0)}`
+  }
+  return '—'
 }
 
 function deriveLifecycle(row: CanonicalDriver): string {
@@ -69,16 +166,18 @@ function derivePayment(row: CanonicalDriver): { status: string; reason: string; 
   const originLabel = PAYMENT_ORIGIN_LABELS[origin] || origin
 
   if (row.payment_status === 'paid') {
-    return { status: 'paid', reason: originLabel, originLabel }
+    return { status: 'paid', reason: row.reason === 'already_paid' ? 'Ya pagado' : originLabel, originLabel }
   }
   if (row.payment_status === 'payable') {
-    return { status: 'payable', reason: '', originLabel }
+    return { status: 'payable', reason: 'Pagable: activó y scout alcanzó tier', originLabel }
   }
-  if (row.reason === 'no_scout') return { status: 'no_payable', reason: 'Sin scout', originLabel }
-  if (row.reason === 'no_activation') return { status: 'no_payable', reason: 'Sin activacion', originLabel }
-  if (row.reason === 'already_paid') return { status: 'paid', reason: 'Ya pagado antes', originLabel }
-  if (row.reason === 'manual_review') return { status: 'revisar', reason: 'Revision manual', originLabel }
-  return { status: 'no_payable', reason: row.reason || 'Sin regla', originLabel }
+  const translated = REASON_LABELS[row.reason] || row.reason
+  if (row.reason === 'no_scout') return { status: 'no_payable', reason: translated, originLabel }
+  if (row.reason === 'no_activation') return { status: 'no_payable', reason: translated, originLabel }
+  if (row.reason === 'min_activated_not_reached') return { status: 'no_payable', reason: translated, originLabel }
+  if (row.reason === 'tier_not_reached') return { status: 'no_payable', reason: translated, originLabel }
+  if (row.reason === 'manual_review') return { status: 'revisar', reason: translated, originLabel }
+  return { status: 'no_payable', reason: translated || 'Sin regla', originLabel }
 }
 
 // ── Progress Icons ──
@@ -188,11 +287,14 @@ function FreshnessBanner({ freshness }: { freshness: CanonicalFreshness | null }
 
 const MOTIVO_COLORS: Record<string, string> = {
   'Sin scout': 'text-yellow-600 font-medium',
-  'Sin activacion': 'text-red-600 font-medium',
-  'Ya pagado antes': 'text-teal-600 font-medium',
+  'Sin activación': 'text-red-600 font-medium',
+  'Ya pagado': 'text-teal-600 font-medium',
+  'Mínimo de activados no alcanzado': 'text-orange-600 font-medium',
+  'No alcanzó tier': 'text-amber-600 font-medium',
+  'Revisión manual': 'text-orange-600 font-medium',
   'Historico': 'text-teal-600 font-medium',
-  'Revision manual': 'text-orange-600 font-medium',
   'Corte': 'text-blue-600 font-medium',
+  'Pagable: activó y scout alcanzó tier': 'text-emerald-600 font-medium',
 }
 
 // ── Main Component ──
@@ -210,6 +312,18 @@ export default function OperationView() {
   const PAGE_SIZE = 50
 
   const [selectedRow, setSelectedRow] = useState<CanonicalDriver | null>(null)
+  const [resolvedScheme, setResolvedScheme] = useState<ResolvedScheme | null>(null)
+
+  // Resolve scheme when driver is selected
+  useEffect(() => {
+    if (!selectedRow?.iso_week_label) { setResolvedScheme(null); return }
+    const cohort = selectedRow.iso_week || ''
+    if (!cohort) { setResolvedScheme(null); return }
+    // Try cabinet first, fallback to fleet
+    resolvePaymentScheme(cohort, 'cabinet').then(setResolvedScheme).catch(() => {
+      resolvePaymentScheme(cohort, 'fleet').then(setResolvedScheme).catch(() => setResolvedScheme(null))
+    })
+  }, [selectedRow])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -418,6 +532,10 @@ export default function OperationView() {
                     <th className="px-3 py-2 text-center whitespace-nowrap">Viajes 7D</th>
                     <th className="px-3 py-2 text-center whitespace-nowrap">Viajes 14D</th>
                     <th className="px-3 py-2">Estado</th>
+                    <th className="px-2 py-2 text-center whitespace-nowrap">Base</th>
+                    <th className="px-2 py-2 text-center whitespace-nowrap">Calidad</th>
+                    <th className="px-2 py-2">Regla</th>
+                    <th className="px-2 py-2">Evidencia</th>
                     <th className="px-3 py-2">Pago</th>
                     <th className="px-3 py-2">Motivo</th>
                     <th className="px-3 py-2 text-right whitespace-nowrap">Monto</th>
@@ -465,6 +583,18 @@ export default function OperationView() {
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           <LifecycleBadge status={lifecycle} />
+                        </td>
+                        <td className="px-2 py-2 text-center">
+                          <BoolBadge value={row.counts_as_activated_base} />
+                        </td>
+                        <td className="px-2 py-2 text-center">
+                          <BoolBadge value={row.counts_as_quality_5v7d} />
+                        </td>
+                        <td className="px-2 py-2 text-xs text-gray-600 max-w-[100px] truncate" title={buildRegla(row)}>
+                          {buildRegla(row)}
+                        </td>
+                        <td className="px-2 py-2 text-[11px] text-gray-500 max-w-[160px] truncate" title={buildEvidence(row)}>
+                          {buildEvidence(row)}
                         </td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           <PaymentBadge status={payment.status} originLabel={payment.originLabel} />
@@ -533,16 +663,59 @@ export default function OperationView() {
                 <F label="5V / 14D" value={selectedRow.converted_5v14d ? 'Si' : 'No'} />
                 <F label="Lifecycle" value={selectedRow.driver_lifecycle_status} />
               </Section>
+              {resolvedScheme && (
+                <Section title="Regla aplicada">
+                  <F label="Esquema" value={`${resolvedScheme.scheme_name} · ${resolvedScheme.version_name}`} bold />
+                  <F label="Cohorte" value={`${resolvedScheme.valid_from_cohort_iso_week} → ${resolvedScheme.valid_to_cohort_iso_week || 'vigente'}`} mono />
+                  <F label="Maduración" value={`${resolvedScheme.maturity_days} días`} />
+                  <F label="Mínimo activados" value={resolvedScheme.min_activated} bold />
+                  <F label="Regla base" value={RULE_LABELS[resolvedScheme.activation_rule] || resolvedScheme.activation_rule} />
+                  <F label="Regla calidad" value={RULE_LABELS[resolvedScheme.quality_rule] || resolvedScheme.quality_rule} />
+                  <F label="Fórmula" value={FORMULA_LABELS[resolvedScheme.formula_type] || resolvedScheme.formula_type} />
+                  <F label="Moneda" value={resolvedScheme.currency} />
+                  {resolvedScheme.tiers.length > 0 && (
+                    <F label="Tiers" value={resolvedScheme.tiers.map(t => `${(t.min_conversion_rate * 100).toFixed(0)}% → S/${t.payout_amount.toFixed(0)}`).join(' | ')} />
+                  )}
+                </Section>
+              )}
               <Section title="Pago">
                 <F label="Estado" value={selectedRow.payment_status} bold />
                 <F label="Origen" value={PAYMENT_ORIGIN_LABELS[selectedRow.payment_origin] || selectedRow.payment_origin} />
                 <F label="Monto" value={selectedRow.amount ? `S/ ${selectedRow.amount}` : '-'} bold />
-                <F label="Regla" value={selectedRow.payment_rule_label} />
-                <F label="Evidencia" value={selectedRow.payment_evidence_label} />
+                <div className="flex items-center px-3 py-1 text-xs">
+                  <span className="text-gray-400 w-32 shrink-0">Trace</span>
+                  <TraceStatusBadge status={selectedRow.payment_trace_status} />
+                </div>
                 <F label="Paid History ID" value={selectedRow.paid_history_id} />
               </Section>
+              <Section title="Explicación financiera">
+                <F label="Cuenta para base activada" value={selectedRow.counts_as_activated_base ? 'Sí' : 'No'} />
+                <F label="Cuenta para calidad 5V/7D" value={selectedRow.counts_as_quality_5v7d ? 'Sí' : 'No'} />
+                <F label="Cuenta para pago" value={selectedRow.counts_for_payment ? 'Sí' : 'No'} bold />
+                <F label="Activados scout" value={selectedRow.scout_activated_base} bold />
+                <F label="5V/7D scout" value={selectedRow.scout_quality_5v7d} bold />
+                <F label="Conversión scout" value={`${(selectedRow.scout_conversion_rate_5v7d * 100).toFixed(1)}%`} />
+                <F label="Tier alcanzado" value={selectedRow.scout_tier_amount > 0 ? `S/${selectedRow.scout_tier_amount.toFixed(0)}` : 'Ninguno'} bold />
+                {selectedRow.scout_tier_amount > 0 && selectedRow.counts_for_payment && (
+                  <F label="Fórmula" value={`${selectedRow.scout_activated_base} activados \u00d7 S/${selectedRow.scout_tier_amount.toFixed(0)} = S/${(selectedRow.scout_activated_base * selectedRow.scout_tier_amount).toFixed(0)}`} />
+                )}
+                {!selectedRow.counts_for_payment && selectedRow.payment_formula_label && (
+                  <F label="Fórmula" value={selectedRow.payment_formula_label} />
+                )}
+                {selectedRow.payment_trace_warning && (
+                  <F label="Motivo" value={selectedRow.payment_trace_warning} bold />
+                )}
+                {!selectedRow.payment_trace_warning && selectedRow.reason !== 'ok' && (
+                  <F label="Motivo" value={REASON_LABELS[selectedRow.reason] || selectedRow.reason} bold />
+                )}
+                {selectedRow.payment_status === 'paid' && (
+                  <div className="px-3 py-1.5 text-[11px] text-teal-700 bg-teal-50 border-t border-teal-100">
+                    Ya pagados excluidos de base; mínimo recalculado sobre pendientes.
+                  </div>
+                )}
+              </Section>
               <Section title="Motivo">
-                <F label="Razon" value={selectedRow.reason} bold />
+                <F label="Razon" value={REASON_LABELS[selectedRow.reason] || selectedRow.reason} bold />
               </Section>
               <Section title="Fuente">
                 <F label="Legacy viajes_0_7" value={selectedRow.legacy_viajes_0_7 ? 'Si' : 'No'} />

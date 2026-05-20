@@ -36,6 +36,7 @@ from app.services.cutoff_engine import (
     review_cutoff,
     approve_cutoff,
     mark_cutoff_paid,
+    create_cutoff_from_cohort,
 )
 from app.services.historical_import_service import (
     preview_historical_import,
@@ -84,6 +85,22 @@ from app.services.canonical_operation_service import (
     get_canonical_operation_snapshot,
     get_operation_diagnostic,
 )
+from app.services.cohort_service import (
+    get_iso_cohorts,
+    get_cohort_diagnostic,
+)
+from app.services.payment_scheme_resolver import (
+    resolve_payment_scheme_for_cohort,
+)
+from app.services.payment_scheme_admin_service import (
+    list_payment_schemes,
+    get_payment_scheme_detail,
+    create_payment_scheme,
+    create_payment_scheme_version,
+    activate_payment_scheme_version,
+    archive_payment_scheme_version,
+    get_payment_schemes_history,
+)
 from app.services.dashboard_service import (
     get_dashboard_overview, get_dashboard_by_scout, get_dashboard_by_week,
     get_dashboard_quality_funnel, get_dashboard_alerts, get_cutoff_trend,
@@ -113,9 +130,29 @@ from app.schemas.scout_liq import (
     ScoutBonusApprove,
     CanonicalOperationSnapshotResponse,
     OperationDiagnosticResponse,
+    CohortListResponse,
+    CohortDiagnosticResponse,
+    ResolvedPaymentScheme,
+    PaymentSchemeListItem,
+    PaymentSchemeDetail,
+    CreatePaymentSchemeRequest,
+    CreateVersionRequest,
+    VersionCreatedResponse,
+    VersionActivatedResponse,
+    SchemeCreatedResponse,
 )
 
 router = APIRouter(prefix="/scout-liq", tags=["scout-liq"])
+
+
+def _parse_snapshot(config_snapshot: str | None) -> dict:
+    """Extrae campos del config_snapshot JSON de un cutoff_run."""
+    if not config_snapshot:
+        return {}
+    try:
+        return json.loads(config_snapshot)
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 # ── Health ────────────────────────────────────────────────────────────────
@@ -637,11 +674,49 @@ def create_cutoff(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/cutoffs/from-cohort")
+def create_cutoff_from_cohort_endpoint(
+    cohort_iso_week: str,
+    scheme_type: Optional[str] = Query(None, description="cabinet | fleet | custom (preferido)"),
+    scheme_id: Optional[int] = Query(None, description="Legacy scheme_id (deprecado)"),
+    origin_filter: Optional[str] = None,
+    scout_type_filter: Optional[str] = None,
+    created_by: Optional[str] = None,
+    force_override: bool = False,
+    db: Session = Depends(get_db),
+):
+    """
+    Crea un cutoff desde una cohorte ISO madura, resolviendo automaticamente
+    la version de esquema de pago aplicable.
+
+    - cohort_iso_week: ej. '2026-W18'
+    - scheme_type: cabinet | fleet | custom (usa el resolver versionado)
+    - scheme_id: deprecado, solo para compatibilidad legacy
+    - force_override: si ya existe un corte locked, forzar recalculo
+    """
+    try:
+        result = create_cutoff_from_cohort(
+            db,
+            cohort_iso_week=cohort_iso_week,
+            scheme_type=scheme_type or "",
+            scheme_id=scheme_id,
+            origin_filter=origin_filter,
+            scout_type_filter=scout_type_filter,
+            created_by=created_by,
+            force_override=force_override,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/cutoffs")
 def list_cutoffs(db: Session = Depends(get_db)):
     runs = db.query(CutoffRun).order_by(CutoffRun.created_at.desc()).all()
-    return [
-        {
+    result = []
+    for r in runs:
+        cfg = _parse_snapshot(r.config_snapshot)
+        result.append({
             "id": r.id,
             "cutoff_name": r.cutoff_name,
             "hire_date_from": str(r.hire_date_from) if r.hire_date_from else None,
@@ -650,10 +725,22 @@ def list_cutoffs(db: Session = Depends(get_db)):
             "status": r.status,
             "quality_data_contract_status": r.quality_data_contract_status,
             "conversion_metric_status": r.conversion_metric_status,
+            "cohort_iso_week": r.cohort_iso_week,
+            "cohort_from": str(r.cohort_from) if r.cohort_from else None,
+            "cohort_to": str(r.cohort_to) if r.cohort_to else None,
+            "maturity_days": r.maturity_days,
+            "ready_to_liquidate": r.ready_to_liquidate,
+            "snapshot_locked_at": str(r.snapshot_locked_at) if r.snapshot_locked_at else None,
+            "scheme_name": cfg.get("scheme_name"),
+            "scheme_type": cfg.get("scheme_type"),
+            "version_name": cfg.get("version_name"),
+            "min_activated": cfg.get("min_activated"),
+            "activation_rule": cfg.get("activation_rule"),
+            "quality_rule": cfg.get("quality_rule"),
+            "formula_type": cfg.get("formula_type"),
             "created_at": str(r.created_at) if r.created_at else None,
-        }
-        for r in runs
-    ]
+        })
+    return result
 
 
 @router.get("/cutoffs/{cutoff_id}")
@@ -661,6 +748,7 @@ def get_cutoff(cutoff_id: int, db: Session = Depends(get_db)):
     run = db.query(CutoffRun).filter(CutoffRun.id == cutoff_id).first()
     if not run:
         raise HTTPException(status_code=404, detail="Cutoff no encontrado")
+    cfg = _parse_snapshot(run.config_snapshot)
     return {
         "id": run.id,
         "cutoff_name": run.cutoff_name,
@@ -673,6 +761,22 @@ def get_cutoff(cutoff_id: int, db: Session = Depends(get_db)):
         "total_source_drivers_count": run.total_source_drivers_count,
         "excluded_invalid_hire_date_count": run.excluded_invalid_hire_date_count,
         "excluded_missing_trip_counts_count": run.excluded_missing_trip_counts_count,
+        "cohort_iso_week": run.cohort_iso_week,
+        "cohort_from": str(run.cohort_from) if run.cohort_from else None,
+        "cohort_to": str(run.cohort_to) if run.cohort_to else None,
+        "maturity_days": run.maturity_days,
+        "maturity_completed_at": str(run.maturity_completed_at) if run.maturity_completed_at else None,
+        "ready_to_liquidate": run.ready_to_liquidate,
+        "snapshot_locked_at": str(run.snapshot_locked_at) if run.snapshot_locked_at else None,
+        "scheme_name": cfg.get("scheme_name"),
+        "scheme_type": cfg.get("scheme_type"),
+        "version_name": cfg.get("version_name"),
+        "min_activated": cfg.get("min_activated"),
+        "activation_rule": cfg.get("activation_rule"),
+        "quality_rule": cfg.get("quality_rule"),
+        "formula_type": cfg.get("formula_type"),
+        "currency": cfg.get("currency"),
+        "tiers": cfg.get("tiers", []),
         "created_at": str(run.created_at) if run.created_at else None,
         "approved_at": str(run.approved_at) if run.approved_at else None,
         "paid_at": str(run.paid_at) if run.paid_at else None,
@@ -2079,6 +2183,146 @@ def operation_diagnostic(
         hire_date_to=hire_date_to,
         origin=origin,
     )
+
+
+# ═══════════════════════════════════════════════════════════
+# COHORTES — Modelo temporal ISO week
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/operation/cohorts", response_model=CohortListResponse)
+def operation_cohorts(
+    readiness: Optional[str] = Query(None, description="Filtrar por readiness_status: open, mature, locked, paid"),
+    db: Session = Depends(get_db),
+):
+    """Lista todas las cohortes ISO detectadas desde la fuente, con metadata temporal y readiness_status."""
+    items = get_iso_cohorts(db, readiness_filter=readiness)
+    return CohortListResponse(total=len(items), cohorts=items)
+
+
+@router.get("/operation/cohorts/diagnostic", response_model=CohortDiagnosticResponse)
+def operation_cohorts_diagnostic(
+    db: Session = Depends(get_db),
+):
+    """Diagnostico de cohortes: conteos por estado de madurez, cohortes liquidables."""
+    return get_cohort_diagnostic(db)
+
+
+# ═══════════════════════════════════════════════════════════
+# PAYMENT SCHEME RESOLVER
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/payment-schemes/resolve", response_model=ResolvedPaymentScheme)
+def resolve_payment_scheme(
+    cohort_iso_week: str,
+    scheme_type: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Resuelve la version de esquema de pago aplicable para una cohorte ISO.
+
+    - cohort_iso_week: ej. '2026-W18'
+    - scheme_type: cabinet | fleet | custom
+    """
+    try:
+        return resolve_payment_scheme_for_cohort(
+            db,
+            cohort_iso_week=cohort_iso_week,
+            scheme_type=scheme_type,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════
+# PAYMENT SCHEME ADMIN — CRUD completo
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/payment-schemes", response_model=List[PaymentSchemeListItem])
+def api_list_payment_schemes(db: Session = Depends(get_db)):
+    """Lista todos los esquemas de pago con su version activa."""
+    return list_payment_schemes(db)
+
+
+@router.get("/payment-schemes/history")
+def api_get_payment_schemes_history(
+    scheme_type: Optional[str] = Query(None, description="Filtrar por tipo: cabinet, fleet, custom"),
+    db: Session = Depends(get_db),
+):
+    """Historico de versiones por scheme_type."""
+    return get_payment_schemes_history(db, scheme_type=scheme_type)
+
+
+@router.get("/payment-schemes/{scheme_id}", response_model=PaymentSchemeDetail)
+def api_get_payment_scheme(scheme_id: int, db: Session = Depends(get_db)):
+    """Detalle de un esquema con todas sus versiones y tiers."""
+    try:
+        return get_payment_scheme_detail(db, scheme_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/payment-schemes", response_model=SchemeCreatedResponse)
+def api_create_payment_scheme(
+    body: CreatePaymentSchemeRequest,
+    db: Session = Depends(get_db),
+):
+    """Crea un nuevo esquema de pago (cabinet, fleet, custom)."""
+    try:
+        return create_payment_scheme(db, body.name, body.scheme_type, body.description)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payment-schemes/{scheme_id}/versions", response_model=VersionCreatedResponse)
+def api_create_payment_scheme_version(
+    scheme_id: int,
+    body: CreateVersionRequest,
+    db: Session = Depends(get_db),
+):
+    """Crea una nueva version draft de un esquema."""
+    try:
+        return create_payment_scheme_version(
+            db,
+            scheme_id=scheme_id,
+            version_name=body.version_name,
+            valid_from_cohort_iso_week=body.valid_from_cohort_iso_week,
+            maturity_days=body.maturity_days,
+            min_activated=body.min_activated,
+            activation_rule=body.activation_rule,
+            quality_rule=body.quality_rule,
+            formula_type=body.formula_type,
+            currency=body.currency,
+            tiers=[t.model_dump() for t in body.tiers],
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payment-scheme-versions/{version_id}/activate", response_model=VersionActivatedResponse)
+def api_activate_payment_scheme_version(
+    version_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Activa una version draft. Automaticamente cierra la version activa anterior
+    estableciendo su valid_to_cohort_iso_week a la semana anterior al valid_from de la nueva.
+    """
+    try:
+        return activate_payment_scheme_version(db, version_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payment-scheme-versions/{version_id}/archive")
+def api_archive_payment_scheme_version(
+    version_id: int,
+    db: Session = Depends(get_db),
+):
+    """Archiva una version draft. No se puede archivar versiones activas o usadas por cortes."""
+    try:
+        return archive_payment_scheme_version(db, version_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════════

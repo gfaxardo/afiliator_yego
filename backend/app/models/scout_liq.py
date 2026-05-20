@@ -142,6 +142,14 @@ class CutoffRun(Base):
     excluded_missing_trip_counts_count = Column(Integer, default=0)
     unassigned_count = Column(Integer, default=0)
     total_source_drivers_count = Column(Integer, default=0)
+    # ── Cohort temporal model ──
+    cohort_iso_week = Column(String(20), nullable=True)
+    cohort_from = Column(Date, nullable=True)
+    cohort_to = Column(Date, nullable=True)
+    maturity_days = Column(Integer, default=7)
+    maturity_completed_at = Column(Date, nullable=True)
+    ready_to_liquidate = Column(Boolean, default=False)
+    snapshot_locked_at = Column(DateTime, nullable=True)
 
     summaries = relationship("CutoffScoutSummary", back_populates="cutoff_run")
     lines = relationship("CutoffDriverLine", back_populates="cutoff_run")
@@ -490,3 +498,65 @@ class HistoricalAttribution(Base):
     import_reason = Column(Text)
     linked_assignment_id = Column(Integer)
     created_at = Column(DateTime, server_default=func.now())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PAYMENT SCHEMES VERSIONADOS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class PaymentScheme(Base):
+    __tablename__ = "scout_liq_payment_schemes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+    scheme_type = Column(String(50), nullable=False)
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    versions = relationship("PaymentSchemeVersion", back_populates="scheme")
+
+
+class PaymentSchemeVersion(Base):
+    __tablename__ = "scout_liq_payment_scheme_versions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scheme_id = Column(Integer, ForeignKey("scout_liq_payment_schemes.id"), nullable=False)
+    version_name = Column(String(100), nullable=False)
+    valid_from_cohort_iso_week = Column(String(20), nullable=False)
+    valid_to_cohort_iso_week = Column(String(20), nullable=True)
+    maturity_days = Column(Integer, default=7, nullable=False)
+    min_activated = Column(Integer, default=8, nullable=False)
+    activation_rule = Column(String(50), nullable=False, default="1V7D")
+    quality_rule = Column(String(50), nullable=False, default="5V7D")
+    formula_type = Column(String(50), nullable=False, default="ACTIVATED_X_TIER")
+    currency = Column(String(3), nullable=False, default="PEN")
+    status = Column(String(20), nullable=False, default="draft")
+    created_at = Column(DateTime, server_default=func.now())
+    activated_at = Column(DateTime, nullable=True)
+    archived_at = Column(DateTime, nullable=True)
+
+    scheme = relationship("PaymentScheme", back_populates="versions")
+    tiers = relationship("PaymentSchemeTier", back_populates="version")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scheme_id", "valid_from_cohort_iso_week",
+            name="uq_scheme_version_valid_from"
+        ),
+    )
+
+
+class PaymentSchemeTier(Base):
+    __tablename__ = "scout_liq_payment_scheme_tiers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    scheme_version_id = Column(
+        Integer, ForeignKey("scout_liq_payment_scheme_versions.id"), nullable=False
+    )
+    min_conversion_rate = Column(Numeric(5, 4), nullable=False)
+    payout_amount = Column(Numeric(10, 2), nullable=False)
+    sort_order = Column(Integer, default=0)
+
+    version = relationship("PaymentSchemeVersion", back_populates="tiers")

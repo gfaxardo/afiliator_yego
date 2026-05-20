@@ -16,6 +16,7 @@ import AttributionImportView from './components/Liquidador/AttributionImportView
 import WorkbookImportView from './components/Liquidador/WorkbookImportView'
 import OperationView from './components/Liquidador/OperationView'
 import DashboardView from './components/Liquidador/DashboardView'
+import PaymentSchemesConfigView from './components/Liquidador/PaymentSchemesConfigView'
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
           <Route path="scouts" element={<ScoutsList />} />
           <Route path="scouts/new" element={<CreateScout />} />
           <Route path="config" element={<ConfigView />} />
+          <Route path="configuracion" element={<PaymentSchemesConfigView />} />
           <Route path="atribucion" element={<AtribucionView />} />
           <Route path="liquidador" element={<LiquidadorView />} />
           <Route path="historical" element={<HistoricalImportView />} />

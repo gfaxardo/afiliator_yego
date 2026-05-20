@@ -573,3 +573,142 @@ class OperationDiagnosticResponse(BaseModel):
     payment_metrics: dict = {}
     freshness: dict = {}
     attribution_quality: dict = {}
+
+
+# ── Cohort temporal model ──
+
+class CohortItem(BaseModel):
+    cohort_iso_week: str
+    cohort_label: str
+    iso_year: int
+    iso_week: int
+    cohort_from: str
+    cohort_to: str
+    maturity_days: int = 7
+    maturity_completed_at: str
+    is_mature: bool = False
+    total_drivers: int = 0
+    drivers_with_scout: int = 0
+    drivers_without_scout: int = 0
+    activated: int = 0
+    converted_5v7d: int = 0
+    readiness_status: str = "open"
+    cutoff_run_id: Optional[int] = None
+    cutoff_status: Optional[str] = None
+
+
+class CohortListResponse(BaseModel):
+    total: int = 0
+    cohorts: List[CohortItem] = []
+
+
+class CohortDiagnosticResponse(BaseModel):
+    current_date: str = ""
+    total_cohorts: int = 0
+    by_readiness: dict = {}
+    liquidable_cohorts: List[str] = []
+    latest_open: Optional[str] = None
+    latest_mature: Optional[str] = None
+    latest_mature_matures_on: Optional[str] = None
+    open_details: List[dict] = []
+    mature_details: List[dict] = []
+
+
+# ── Payment Scheme Resolver ──
+
+class TierItem(BaseModel):
+    min_conversion_rate: float = 0.0
+    payout_amount: float = 0.0
+    sort_order: int = 0
+
+
+class ResolvedPaymentScheme(BaseModel):
+    scheme_id: int
+    scheme_name: str = ""
+    scheme_type: str = ""
+    description: Optional[str] = None
+    scheme_version_id: int
+    version_name: str = ""
+    valid_from_cohort_iso_week: str = ""
+    valid_to_cohort_iso_week: Optional[str] = None
+    maturity_days: int = 7
+    min_activated: int = 8
+    activation_rule: str = "1V7D"
+    quality_rule: str = "5V7D"
+    formula_type: str = "ACTIVATED_X_TIER"
+    currency: str = "PEN"
+    tiers: List[TierItem] = []
+
+
+# ── Payment Scheme Admin ──
+
+class PaymentSchemeListItem(BaseModel):
+    scheme_id: int
+    name: str = ""
+    scheme_type: str = ""
+    description: Optional[str] = None
+    is_active: bool = True
+    active_version_id: Optional[int] = None
+    active_version_name: Optional[str] = None
+    active_since_cohort: Optional[str] = None
+    version_count: int = 0
+    created_at: Optional[str] = None
+
+
+class PaymentSchemeDetail(BaseModel):
+    scheme_id: int
+    name: str = ""
+    scheme_type: str = ""
+    description: Optional[str] = None
+    is_active: bool = True
+    created_at: Optional[str] = None
+    versions: List[dict] = []
+
+
+class CreatePaymentSchemeRequest(BaseModel):
+    name: str
+    scheme_type: str
+    description: Optional[str] = None
+
+
+class TierInput(BaseModel):
+    min_conversion_rate: float
+    payout_amount: float
+
+
+class CreateVersionRequest(BaseModel):
+    version_name: str
+    valid_from_cohort_iso_week: str
+    maturity_days: int = 7
+    min_activated: int = 8
+    activation_rule: str = "1V7D"
+    quality_rule: str = "5V7D"
+    formula_type: str = "ACTIVATED_X_TIER"
+    currency: str = "PEN"
+    tiers: List[TierInput]
+
+
+class VersionCreatedResponse(BaseModel):
+    version_id: int
+    version_name: str = ""
+    scheme_id: int
+    valid_from_cohort_iso_week: str = ""
+    status: str = "draft"
+    tiers_count: int = 0
+
+
+class VersionActivatedResponse(BaseModel):
+    version_id: int
+    version_name: str = ""
+    scheme_id: int
+    status: str = "active"
+    valid_from_cohort_iso_week: str = ""
+    activated_at: Optional[str] = None
+    previous_active_archived: Optional[str] = None
+    previous_active_closed_at: Optional[str] = None
+
+
+class SchemeCreatedResponse(BaseModel):
+    scheme_id: int
+    name: str = ""
+    scheme_type: str = ""
