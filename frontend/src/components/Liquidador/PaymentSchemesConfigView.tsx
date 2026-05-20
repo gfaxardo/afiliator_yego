@@ -10,20 +10,32 @@ import {
 // ── Label helpers ──
 
 const RULE_LABELS: Record<string, string> = {
-  '1V7D': '1 viaje en 7 días',
-  '5V7D': '5 viajes en 7 días',
-  '50V30D': '50 viajes en 30 días',
+  '1V7D': '1 viaje en 7 dias',
+  '5V7D': '5 viajes en 7 dias',
+  '50V30D': '50 viajes en 30 dias',
 }
 
 const FORMULA_LABELS: Record<string, string> = {
-  'ACTIVATED_X_TIER': 'Activados × Tier',
-  'QUALITY_X_FIXED': 'Calidad × Fijo',
+  'ACTIVATED_X_TIER': 'Activados x Tier',
+  'QUALITY_X_FIXED': 'Calidad x Fijo',
+}
+
+const PAYS_ON_LABELS: Record<string, string> = {
+  'ACTIVATED_BASE': 'Base activada (volumen)',
+  'QUALITY_HIT': 'Hito de calidad',
+  'FIXED': 'Monto fijo',
 }
 
 const SCHEME_TYPE_LABELS: Record<string, string> = {
   cabinet: 'Cabinet',
   fleet: 'Fleet',
   custom: 'Custom',
+}
+
+const PAYS_ON_COLORS: Record<string, string> = {
+  'ACTIVATED_BASE': 'bg-blue-100 text-blue-700 border-blue-200',
+  'QUALITY_HIT': 'bg-purple-100 text-purple-700 border-purple-200',
+  'FIXED': 'bg-gray-100 text-gray-700 border-gray-200',
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -39,6 +51,35 @@ function statusLabel(v: SchemeVersionDetail): string {
   if (v.status === 'active' && !v.valid_to_cohort_iso_week) return 'Activa vigente'
   if (v.status === 'active' && v.valid_to_cohort_iso_week) return 'Cerrada'
   return v.status
+}
+
+function versionTypeLabel(v: SchemeVersionDetail): string | null {
+  const name = (v.version_name || '').toLowerCase()
+  if (name.includes('transition')) return 'TRANSICIÓN'
+  if (name.includes('standard')) return 'ESTÁNDAR'
+  return null
+}
+
+function versionTypeColor(v: SchemeVersionDetail): string {
+  const label = versionTypeLabel(v)
+  if (label === 'TRANSICIÓN') return 'bg-amber-100 text-amber-700 border-amber-200'
+  if (label === 'ESTÁNDAR') return 'bg-emerald-100 text-emerald-700 border-emerald-200'
+  return ''
+}
+
+function versionTypeFromName(name: string | null): string | null {
+  if (!name) return null
+  const n = name.toLowerCase()
+  if (n.includes('transition')) return 'TRANSICIÓN'
+  if (n.includes('standard')) return 'ESTÁNDAR'
+  return null
+}
+
+function versionTypeColorFromName(name: string | null): string {
+  const label = versionTypeFromName(name)
+  if (label === 'TRANSICIÓN') return 'bg-amber-100 text-amber-700 border-amber-200'
+  if (label === 'ESTÁNDAR') return 'bg-emerald-100 text-emerald-700 border-emerald-200'
+  return ''
 }
 
 function statusColor(v: SchemeVersionDetail): string {
@@ -183,8 +224,11 @@ export default function PaymentSchemesConfigView() {
               }`}
             >
               <div className="font-semibold text-gray-800">{s.name}</div>
-              <div className="text-gray-400 mt-0.5 flex gap-2">
+              <div className="text-gray-400 mt-0.5 flex gap-2 items-center flex-wrap">
                 <Badge label={SCHEME_TYPE_LABELS[s.scheme_type] || s.scheme_type} />
+                {versionTypeFromName(s.active_version_name) && (
+                  <Badge label={versionTypeFromName(s.active_version_name)!} color={versionTypeColorFromName(s.active_version_name)} />
+                )}
                 {s.active_version_name && (
                   <span className="text-green-600">{s.active_version_name} desde {s.active_since_cohort}</span>
                 )}
@@ -227,20 +271,30 @@ export default function PaymentSchemesConfigView() {
 
             {/* B. Active version */}
             {activeVersion && (
-              <Section title="Versión Activa">
-                <F label="Versión" value={activeVersion.version_name} bold />
+              <Section title="Version Activa">
+                <div className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                  <span className="text-gray-400 w-36 shrink-0">Version</span>
+                  <span className="text-gray-700 font-medium">{activeVersion.version_name}</span>
+                  {versionTypeLabel(activeVersion) && (
+                    <Badge label={versionTypeLabel(activeVersion)!} color={versionTypeColor(activeVersion)} />
+                  )}
+                  {activeVersion.pays_on_rule && (
+                    <Badge label={PAYS_ON_LABELS[activeVersion.pays_on_rule] || activeVersion.pays_on_rule}
+                      color={PAYS_ON_COLORS[activeVersion.pays_on_rule] || 'bg-gray-100 text-gray-600 border-gray-200'} />
+                  )}
+                </div>
                 <F label="Vigencia desde" value={activeVersion.valid_from_cohort_iso_week} mono />
-                <F label="Vigencia hasta" value={activeVersion.valid_to_cohort_iso_week || 'Sin límite'} mono />
-                <F label="Maduración" value={`${activeVersion.maturity_days} días`} />
-                <F label="Mín. activados" value={activeVersion.min_activated} bold />
-                <F label="Regla activación" value={RULE_LABELS[activeVersion.activation_rule] || activeVersion.activation_rule} />
-                <F label="Regla calidad" value={RULE_LABELS[activeVersion.quality_rule] || activeVersion.quality_rule} />
-                <F label="Fórmula" value={FORMULA_LABELS[activeVersion.formula_type] || activeVersion.formula_type} />
+                <F label="Vigencia hasta" value={activeVersion.valid_to_cohort_iso_week || 'Sin limite'} mono />
+                <F label="Hito para volumen" value={RULE_LABELS[activeVersion.volume_rule || activeVersion.activation_rule] || activeVersion.volume_rule || activeVersion.activation_rule} mono bold />
+                <F label="Hito de calidad" value={RULE_LABELS[activeVersion.counts_quality_rule || activeVersion.quality_rule] || activeVersion.counts_quality_rule || activeVersion.quality_rule} mono bold />
+                <F label="Min. volumen" value={activeVersion.min_volume_count || activeVersion.min_activated} bold />
+                <F label="Base pagable" value={PAYS_ON_LABELS[activeVersion.pays_on_rule] || activeVersion.pays_on_rule || '—'} />
+                <F label="Formula de pago" value={FORMULA_LABELS[activeVersion.payout_formula_type || activeVersion.formula_type] || activeVersion.payout_formula_type || activeVersion.formula_type} bold />
+                <F label="Ventana maduracion" value={`${activeVersion.maturity_window_days || activeVersion.maturity_days} dias`} />
                 <F label="Moneda" value={activeVersion.currency} />
-                <div className="px-3 py-1 text-[10px] text-gray-400">La versión activa es de solo lectura. Para cambiar reglas, crea una nueva versión.</div>
+                <div className="px-3 py-1 text-[10px] text-gray-400">La version activa es de solo lectura. Para cambiar reglas, crea una nueva version.</div>
               </Section>
             )}
-
             {/* C. Tiers (active version) */}
             {activeVersion && activeVersion.tiers.length > 0 && (
               <Section title={`Tiers (${activeVersion.tiers.length})`}>
@@ -261,21 +315,28 @@ export default function PaymentSchemesConfigView() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-left text-[10px] text-gray-400 uppercase border-b border-gray-200">
-                    <th className="px-2 py-1">Versión</th>
+                    <th className="px-2 py-1">Version</th>
                     <th className="px-2 py-1">Desde</th>
                     <th className="px-2 py-1">Hasta</th>
-                    <th className="px-2 py-1">Min Act</th>
+                    <th className="px-2 py-1">Volumen</th>
+                    <th className="px-2 py-1">Min Vol</th>
                     <th className="px-2 py-1">Estado</th>
-                    <th className="px-2 py-1">Acción</th>
+                    <th className="px-2 py-1">Accion</th>
                   </tr>
                 </thead>
                 <tbody>
                   {[...selectedScheme.versions].reverse().map(v => (
                     <tr key={v.version_id} className="border-t border-gray-50 hover:bg-gray-50">
-                      <td className="px-2 py-1 font-medium text-gray-700">{v.version_name}</td>
+                      <td className="px-2 py-1 font-medium text-gray-700">
+                        <span>{v.version_name}</span>
+                        {versionTypeLabel(v) && (
+                          <Badge label={versionTypeLabel(v)!} color={versionTypeColor(v)} />
+                        )}
+                      </td>
                       <td className="px-2 py-1 font-mono text-gray-500">{v.valid_from_cohort_iso_week}</td>
-                      <td className="px-2 py-1 font-mono text-gray-400">{v.valid_to_cohort_iso_week || '—'}</td>
-                      <td className="px-2 py-1 text-gray-600">{v.min_activated}</td>
+                      <td className="px-2 py-1 font-mono text-gray-400">{v.valid_to_cohort_iso_week || '\u2014'}</td>
+                      <td className="px-2 py-1 text-gray-600 font-mono text-[10px]">{(v.volume_rule || v.activation_rule)}</td>
+                      <td className="px-2 py-1 text-gray-600">{v.min_volume_count || v.min_activated}</td>
                       <td className="px-2 py-1"><Badge label={statusLabel(v)} color={statusColor(v)} /></td>
                       <td className="px-2 py-1">
                         {v.status === 'draft' && (

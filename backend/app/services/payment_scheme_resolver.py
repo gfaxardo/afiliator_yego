@@ -102,10 +102,17 @@ def resolve_payment_scheme_for_cohort(
         "valid_from_cohort_iso_week": version.valid_from_cohort_iso_week,
         "valid_to_cohort_iso_week": version.valid_to_cohort_iso_week,
         "maturity_days": version.maturity_days,
+        "maturity_window_days": version.maturity_window_days or version.maturity_days,
         "min_activated": version.min_activated,
+        "min_volume_count": version.min_volume_count or version.min_activated,
         "activation_rule": version.activation_rule,
+        "volume_rule": version.volume_rule or version.activation_rule,
         "quality_rule": version.quality_rule,
+        "counts_volume_rule": version.counts_volume_rule or version.activation_rule,
+        "counts_quality_rule": version.counts_quality_rule or version.quality_rule,
         "formula_type": version.formula_type,
+        "pays_on_rule": version.pays_on_rule or "",
+        "payout_formula_type": version.payout_formula_type or version.formula_type,
         "currency": version.currency,
         "tiers": [
             {

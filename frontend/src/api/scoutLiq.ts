@@ -1179,10 +1179,17 @@ export interface SchemeVersionDetail {
   valid_from_cohort_iso_week: string
   valid_to_cohort_iso_week: string | null
   maturity_days: number
+  maturity_window_days: number
   min_activated: number
+  min_volume_count: number
   activation_rule: string
+  volume_rule: string
   quality_rule: string
+  counts_volume_rule: string
+  counts_quality_rule: string
   formula_type: string
+  pays_on_rule: string
+  payout_formula_type: string
   currency: string
   status: string
   created_at: string | null
@@ -1205,10 +1212,17 @@ export interface CreateVersionPayload {
   version_name: string
   valid_from_cohort_iso_week: string
   maturity_days: number
+  maturity_window_days?: number
   min_activated: number
+  min_volume_count?: number
   activation_rule: string
+  volume_rule?: string
   quality_rule: string
+  counts_volume_rule?: string
+  counts_quality_rule?: string
   formula_type: string
+  pays_on_rule?: string
+  payout_formula_type?: string
   currency: string
   tiers: { min_conversion_rate: number; payout_amount: number }[]
 }
@@ -1276,15 +1290,88 @@ export interface ResolvedScheme {
   valid_from_cohort_iso_week: string
   valid_to_cohort_iso_week: string | null
   maturity_days: number
+  maturity_window_days: number
   min_activated: number
+  min_volume_count: number
   activation_rule: string
+  volume_rule: string
   quality_rule: string
+  counts_volume_rule: string
+  counts_quality_rule: string
   formula_type: string
+  pays_on_rule: string
+  payout_formula_type: string
   currency: string
   tiers: { min_conversion_rate: number; payout_amount: number; sort_order: number }[]
 }
 
 export async function resolvePaymentScheme(cohort_iso_week: string, scheme_type: string): Promise<ResolvedScheme> {
   const { data } = await api.get('/payment-schemes/resolve', { params: { cohort_iso_week, scheme_type } })
+  return data
+}
+
+// ── Cutoff from Cohort ──
+
+export async function createCutoffFromCohort(params: {
+  cohort_iso_week: string
+  scheme_type?: string
+  scheme_id?: number
+  origin_filter?: string
+  force_override?: boolean
+}): Promise<any> {
+  const { data } = await api.post('/cutoffs/from-cohort', null, { params })
+  return data
+}
+
+export function getCutoffExportFinancialUrl(cutoffId: number): string {
+  return `${api.defaults.baseURL}/cutoffs/${cutoffId}/export-financial.csv`
+}
+
+// ── Manual Overrides ──
+
+export interface ManualOverrideItem {
+  id: number
+  driver_id: string
+  cohort_iso_week: string | null
+  scout_id_before: number | null
+  scout_id_after: number | null
+  override_type: string
+  amount: number | null
+  currency: string
+  reason: string
+  notes: string | null
+  created_by: string | null
+  created_at: string | null
+  approved_by: string | null
+  approved_at: string | null
+  status: string
+  blocks_future_payment: boolean
+  paid_history_id: number | null
+}
+
+export async function listManualOverrides(params?: {
+  driver_id?: string; override_type?: string; status?: string
+}): Promise<ManualOverrideItem[]> {
+  const { data } = await api.get('/manual-overrides', { params })
+  return data
+}
+
+export async function getDriverOverrides(driverId: string): Promise<ManualOverrideItem[]> {
+  const { data } = await api.get(`/drivers/${encodeURIComponent(driverId)}/manual-overrides`)
+  return data
+}
+
+export async function createManualOverride(body: {
+  driver_id: string
+  override_type: string
+  reason: string
+  cohort_iso_week?: string
+  scout_id?: number
+  scout_id_before?: number
+  amount?: number
+  notes?: string
+  created_by?: string
+}): Promise<ManualOverrideItem> {
+  const { data } = await api.post('/manual-overrides', body)
   return data
 }

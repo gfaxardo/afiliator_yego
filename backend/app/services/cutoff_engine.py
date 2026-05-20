@@ -513,6 +513,179 @@ def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# EXPORT FINANCIERO AUDITABLE
+# ═══════════════════════════════════════════════════════════════════════════
+
+def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
+    """
+    Genera CSV financiero auditable para un cutoff.
+    Usa config_snapshot congelado, NO el resolver dinámico.
+    """
+    import csv as _csv
+    import io as _io
+
+    run = db.query(CutoffRun).filter(CutoffRun.id == cutoff_run_id).first()
+    if not run:
+        raise ValueError(f"Cutoff {cutoff_run_id} no encontrado")
+
+    config = json.loads(run.config_snapshot) if run.config_snapshot else {}
+
+    # Load lines with scout info
+    lines = db.query(CutoffDriverLine).filter(
+        CutoffDriverLine.cutoff_run_id == cutoff_run_id
+    ).order_by(CutoffDriverLine.scout_id, CutoffDriverLine.trips_0_7_count.desc()).all()
+
+    # Load scout names
+    scout_ids = list(set(l.scout_id for l in lines))
+    scout_names: Dict[int, str] = {}
+    if scout_ids:
+        scouts = db.query(Scout).filter(Scout.id.in_(scout_ids)).all()
+        scout_names = {s.id: s.scout_name for s in scouts}
+
+    # Load summaries for scout-level metrics
+    summaries = db.query(CutoffScoutSummary).filter(
+        CutoffScoutSummary.cutoff_run_id == cutoff_run_id
+    ).all()
+    summary_by_scout = {s.scout_id: s for s in summaries}
+
+    # Driver names from source
+    driver_ids = [l.driver_id for l in lines if l.driver_id]
+    driver_names: Dict[str, str] = {}
+    driver_licenses: Dict[str, str] = {}
+    if driver_ids:
+        placeholders = ", ".join(f":did{i}" for i in range(len(driver_ids)))
+        params = {f"did{i}": d for i, d in enumerate(driver_ids)}
+        rows = db.execute(text(
+            f"SELECT driver_id, COALESCE(driver_nombre,''), COALESCE(driver_apellido,''), license "
+            f"FROM module_ct_cabinet_drivers WHERE driver_id IN ({placeholders})"
+        ), params).fetchall()
+        for r in rows:
+            nombre = (r[1] or "").strip()
+            apellido = (r[2] or "").strip()
+            if apellido and nombre:
+                driver_names[r[0]] = f"{apellido}, {nombre}"
+            elif nombre:
+                driver_names[r[0]] = nombre
+            else:
+                driver_names[r[0]] = r[0] or ""
+            driver_licenses[r[0]] = r[3] or ""
+
+    # Build CSV
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+
+    # Header
+    writer.writerow([
+        # Corte
+        "cutoff_id", "cohort_iso_week", "cohort_from", "cohort_to",
+        "maturity_completed_at", "snapshot_locked_at",
+        "scheme_name", "scheme_type", "scheme_version", "rule_snapshot_source",
+        # Reglas multi-esquema
+        "volume_rule", "counts_volume_rule", "counts_quality_rule",
+        "pays_on_rule", "payout_formula_type", "maturity_window_days",
+        # Scout
+        "scout_id", "scout_name",
+        "activated_base", "quality_5v7d", "conversion_rate_5v7d",
+        "min_activated", "min_volume_count", "tier_threshold", "tier_amount",
+        "formula_type", "currency",
+        # Driver
+        "driver_id", "driver_name", "license", "hire_date", "origin",
+        "trips_7d", "trips_14d",
+        "counts_as_activated_base", "counts_as_quality_5v7d", "counts_for_payment",
+        # Pago
+        "payment_status", "payment_origin", "payment_amount",
+        "payment_reason", "trace_status", "trace_warning",
+    ])
+
+    # Cohorte fields (same for all rows)
+    cohort_from = str(run.cohort_from) if run.cohort_from else ""
+    cohort_to = str(run.cohort_to) if run.cohort_to else ""
+    maturity_at = str(run.maturity_completed_at) if run.maturity_completed_at else ""
+    snapshot_at = str(run.snapshot_locked_at) if run.snapshot_locked_at else ""
+
+    # Scheme fields from config_snapshot
+    scheme_name = config.get("scheme_name", "")
+    scheme_type = config.get("scheme_type", "")
+    version_name = config.get("version_name", "")
+    snapshot_source = "config_snapshot" if version_name else "legacy"
+    min_activated = config.get("min_activated", config.get("min_affiliations", 0))
+    min_volume_count = config.get("min_volume_count", min_activated)
+    formula_type = config.get("formula_type", config.get("conversion_metric", ""))
+    currency = config.get("currency", "PEN")
+    tiers_in_snapshot = config.get("tiers", [])
+    volume_rule = config.get("volume_rule", config.get("activation_rule", ""))
+    counts_volume_rule = config.get("counts_volume_rule", config.get("activation_rule", ""))
+    counts_quality_rule = config.get("counts_quality_rule", config.get("quality_rule", ""))
+    pays_on_rule = config.get("pays_on_rule", "")
+    payout_formula_type = config.get("payout_formula_type", formula_type)
+    maturity_window_days = config.get("maturity_window_days", config.get("maturity_days", 0))
+
+    # Rows
+    for l in lines:
+        sid = l.scout_id
+        summary = summary_by_scout.get(sid)
+
+        # Scout metrics
+        activated_base = summary.total_activated if summary else 0
+        quality_5v7d = summary.drivers_5plus_0_7 if summary else 0
+        conv_rate = float(summary.conversion_rate_5v7d) if summary and summary.conversion_rate_5v7d else 0
+        tier_amount_val = float(summary.payout_per_activated) if summary and summary.payout_per_activated else 0
+
+        # Tier threshold from config (find which tier matched)
+        tier_threshold = 0
+        formula_detail = ""
+        for t in tiers_in_snapshot:
+            if conv_rate >= t.get("min_conversion_rate", 0):
+                tier_threshold = t.get("min_conversion_rate", 0)
+        if tier_amount_val > 0:
+            formula_detail = f"activados({activated_base}) x tier({tier_amount_val}) = {activated_base * tier_amount_val:.0f}"
+
+        # Driver-level justification
+        payment_origin = "cutoff_engine" if l.payout_eligible_flag else (
+            "cutoff_blocked" if l.payment_status else "none"
+        )
+        payment_reason = l.blocked_reason or (
+            "Pagable: scout alcanzo tier" if l.payout_eligible_flag else
+            ("No activado" if not l.activated_flag else "No pagable")
+        )
+        trace_status = "paid_confirmed" if l.payment_status == "paid" else (
+            "payable_scout_tier" if l.payout_eligible_flag else
+            ("no_activation" if not l.activated_flag else
+             ("blocked_already_paid" if l.already_paid else
+              ("blocked_min_activated" if l.blocked_reason and "Minimo" in (l.blocked_reason or "") else
+               "blocked_no_tier")))
+        )
+        trace_warning = l.blocked_reason or ("" if l.payout_eligible_flag else "Verificar regla")
+
+        counts_base = bool(l.activated_flag and not l.already_paid)
+        counts_quality = bool(l.is_converted_5trips_7d and not l.already_paid)
+        counts_payment = bool(l.payout_eligible_flag)
+
+        writer.writerow([
+            run.id, run.cohort_iso_week or "", cohort_from, cohort_to,
+            maturity_at, snapshot_at,
+            scheme_name, scheme_type, version_name, snapshot_source,
+            volume_rule, counts_volume_rule, counts_quality_rule,
+            pays_on_rule, payout_formula_type, str(maturity_window_days),
+            sid, scout_names.get(sid, ""),
+            activated_base, quality_5v7d, f"{conv_rate:.4f}",
+            min_activated, min_volume_count, f"{tier_threshold:.4f}", f"{tier_amount_val:.2f}",
+            formula_type, currency,
+            l.driver_id or "", driver_names.get(l.driver_id, ""),
+            driver_licenses.get(l.driver_id, ""),
+            str(l.hire_date) if l.hire_date else "",
+            l.origin or "",
+            l.trips_0_7_count or 0, l.trips_0_14_count or 0,
+            str(counts_base).lower(), str(counts_quality).lower(), str(counts_payment).lower(),
+            l.payment_status or "not_payable", payment_origin,
+            f"{float(l.calculated_amount or 0):.2f}",
+            payment_reason, trace_status, trace_warning or "",
+        ])
+
+    return buf.getvalue()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # CORTE DESDE COHORTE ISO
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -725,10 +898,17 @@ def _build_config_snapshot_from_resolved(resolved: dict) -> str:
         "valid_from_cohort_iso_week": resolved.get("valid_from_cohort_iso_week"),
         "valid_to_cohort_iso_week": resolved.get("valid_to_cohort_iso_week"),
         "maturity_days": resolved["maturity_days"],
+        "maturity_window_days": resolved.get("maturity_window_days", resolved["maturity_days"]),
         "min_activated": resolved["min_activated"],
+        "min_volume_count": resolved.get("min_volume_count", resolved["min_activated"]),
         "activation_rule": resolved["activation_rule"],
+        "volume_rule": resolved.get("volume_rule", resolved["activation_rule"]),
         "quality_rule": resolved["quality_rule"],
+        "counts_volume_rule": resolved.get("counts_volume_rule", resolved["activation_rule"]),
+        "counts_quality_rule": resolved.get("counts_quality_rule", resolved["quality_rule"]),
         "formula_type": resolved["formula_type"],
+        "pays_on_rule": resolved.get("pays_on_rule", ""),
+        "payout_formula_type": resolved.get("payout_formula_type", resolved["formula_type"]),
         "currency": resolved["currency"],
         # Legacy compatibilidad con calculate_cutoff
         "min_affiliations": resolved["min_activated"],

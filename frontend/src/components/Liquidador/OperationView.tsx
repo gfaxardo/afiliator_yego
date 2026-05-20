@@ -4,6 +4,7 @@ import {
   type CanonicalDriver, type CanonicalSnapshotResponse,
   type CanonicalFreshness, type OperationDiagnosticResponse,
   resolvePaymentScheme, type ResolvedScheme,
+  createManualOverride, getDriverOverrides, type ManualOverrideItem,
 } from '../../api/scoutLiq'
 
 // ── LIFECYCLE desde datos canonicos ──
@@ -36,14 +37,26 @@ const LIFECYCLE_ROW_BORDER: Record<string, string> = {
 // ── TRACE STATUS translations ──
 
 const RULE_LABELS: Record<string, string> = {
-  '1V7D': '1 viaje en 7 días',
-  '5V7D': '5 viajes en 7 días',
-  '50V30D': '50 viajes en 30 días',
+  '1V7D': '1 viaje en 7 dias',
+  '5V7D': '5 viajes en 7 dias',
+  '50V30D': '50 viajes en 30 dias',
 }
 
 const FORMULA_LABELS: Record<string, string> = {
-  'ACTIVATED_X_TIER': 'Activados × Tier',
-  'QUALITY_X_FIXED': 'Calidad × Fijo',
+  'ACTIVATED_X_TIER': 'Activados x Tier',
+  'QUALITY_X_FIXED': 'Calidad x Fijo',
+}
+
+const PAYS_ON_LABELS: Record<string, string> = {
+  'ACTIVATED_BASE': 'Base activada (volumen)',
+  'QUALITY_HIT': 'Hito de calidad',
+  'FIXED': 'Monto fijo',
+}
+
+const SCHEME_TYPE_LABELS: Record<string, string> = {
+  cabinet: 'Cabinet',
+  fleet: 'Fleet',
+  custom: 'Custom',
 }
 
 const TRACE_STATUS_LABELS: Record<string, string> = {
@@ -313,16 +326,48 @@ export default function OperationView() {
 
   const [selectedRow, setSelectedRow] = useState<CanonicalDriver | null>(null)
   const [resolvedScheme, setResolvedScheme] = useState<ResolvedScheme | null>(null)
+  const [driverOverrides, setDriverOverrides] = useState<ManualOverrideItem[]>([])
+  const [showOverrideModal, setShowOverrideModal] = useState(false)
+  const [overrideAction, setOverrideAction] = useState<string>('')
+  const [overrideForm, setOverrideForm] = useState({ reason: '', amount: 30, scout_id: '', notes: '' })
 
-  // Resolve scheme when driver is selected
+  async function handleManualOverride() {
+    if (!selectedRow?.driver_id || !overrideAction) return
+    try {
+      await createManualOverride({
+        driver_id: selectedRow.driver_id,
+        override_type: overrideAction,
+        reason: overrideForm.reason || `Accion manual: ${overrideAction}`,
+        amount: overrideAction === 'force_pay' ? overrideForm.amount : undefined,
+        scout_id: overrideAction === 'assign_scout' ? parseInt(overrideForm.scout_id) || undefined : undefined,
+        notes: overrideForm.notes || undefined,
+        cohort_iso_week: selectedRow.iso_week || undefined,
+      })
+      setShowOverrideModal(false)
+      setOverrideForm({ reason: '', amount: 30, scout_id: '', notes: '' })
+      // Reload overrides
+      getDriverOverrides(selectedRow.driver_id).then(setDriverOverrides).catch(() => {})
+    } catch (e: any) {
+      alert(e.response?.data?.detail || e.message || 'Error')
+    }
+  }
+
+  function openOverride(action: string) {
+    setOverrideAction(action)
+    setOverrideForm({ reason: '', amount: 30, scout_id: '', notes: '' })
+    setShowOverrideModal(true)
+  }
+
+  // Resolve scheme + load overrides when driver is selected
   useEffect(() => {
-    if (!selectedRow?.iso_week_label) { setResolvedScheme(null); return }
+    if (!selectedRow?.driver_id) { setResolvedScheme(null); setDriverOverrides([]); return }
     const cohort = selectedRow.iso_week || ''
-    if (!cohort) { setResolvedScheme(null); return }
-    // Try cabinet first, fallback to fleet
-    resolvePaymentScheme(cohort, 'cabinet').then(setResolvedScheme).catch(() => {
-      resolvePaymentScheme(cohort, 'fleet').then(setResolvedScheme).catch(() => setResolvedScheme(null))
-    })
+    if (cohort) {
+      resolvePaymentScheme(cohort, 'cabinet').then(setResolvedScheme).catch(() => {
+        resolvePaymentScheme(cohort, 'fleet').then(setResolvedScheme).catch(() => setResolvedScheme(null))
+      })
+    }
+    getDriverOverrides(selectedRow.driver_id).then(setDriverOverrides).catch(() => setDriverOverrides([]))
   }, [selectedRow])
 
   const loadData = useCallback(async () => {
@@ -624,8 +669,71 @@ export default function OperationView() {
                     className="px-3 py-1 border border-gray-200 rounded text-xs disabled:opacity-30 hover:bg-gray-100">Siguiente</button>
                 </div>
               </div>
+      )}
+
+      {/* Manual Override Modal */}
+      {showOverrideModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setShowOverrideModal(false)} />
+          <div className="relative bg-white rounded-lg shadow-xl border border-gray-200 w-[400px] max-h-[80vh] overflow-y-auto p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-sm text-gray-800">
+                {overrideAction === 'assign_scout' ? 'Asignar Scout' :
+                 overrideAction === 'force_exclude' ? 'Excluir del Pago' :
+                 overrideAction === 'force_pay' ? 'Pago Manual' :
+                 overrideAction === 'send_review' ? 'Enviar a Revisión' : 'Acción Manual'}
+              </h3>
+              <button onClick={() => setShowOverrideModal(false)} className="text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+
+            <div className="text-xs text-gray-500">
+              Driver: <span className="font-mono text-gray-700">{selectedRow?.driver_id?.slice(0, 20)}</span>
+            </div>
+
+            {overrideAction === 'assign_scout' && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Scout ID destino</span>
+                <input type="number" value={overrideForm.scout_id} onChange={e => setOverrideForm({...overrideForm, scout_id: e.target.value})}
+                  className="border rounded px-2 py-1 text-xs" placeholder="ID del scout" />
+              </label>
             )}
+
+            {overrideAction === 'force_pay' && (
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Monto (S/)</span>
+                <input type="number" step="1" min="1" value={overrideForm.amount} onChange={e => setOverrideForm({...overrideForm, amount: parseFloat(e.target.value) || 0})}
+                  className="border rounded px-2 py-1 text-xs" />
+                <span className="text-[10px] text-purple-600">Este pago no salio de la regla automatica. Fue autorizado manualmente.</span>
+              </label>
+            )}
+
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-gray-500">Motivo *</span>
+              <input value={overrideForm.reason} onChange={e => setOverrideForm({...overrideForm, reason: e.target.value})}
+                className="border rounded px-2 py-1 text-xs" placeholder="Motivo de la accion" />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-gray-500">Nota (opcional)</span>
+              <input value={overrideForm.notes} onChange={e => setOverrideForm({...overrideForm, notes: e.target.value})}
+                className="border rounded px-2 py-1 text-xs" placeholder="Nota adicional" />
+            </label>
+
+            <div className="flex gap-2 pt-2">
+              <button onClick={handleManualOverride}
+                disabled={!overrideForm.reason.trim() || (overrideAction === 'assign_scout' && !overrideForm.scout_id)}
+                className="px-4 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50 font-semibold">
+                Confirmar
+              </button>
+              <button onClick={() => setShowOverrideModal(false)}
+                className="px-4 py-1.5 text-xs text-gray-500 hover:text-gray-700 border rounded">
+                Cancelar
+              </button>
+            </div>
           </div>
+        </div>
+      )}
+    </div>
         ) : null}
       </div>
 
@@ -665,19 +773,47 @@ export default function OperationView() {
               </Section>
               {resolvedScheme && (
                 <Section title="Regla aplicada">
-                  <F label="Esquema" value={`${resolvedScheme.scheme_name} · ${resolvedScheme.version_name}`} bold />
-                  <F label="Cohorte" value={`${resolvedScheme.valid_from_cohort_iso_week} → ${resolvedScheme.valid_to_cohort_iso_week || 'vigente'}`} mono />
-                  <F label="Maduración" value={`${resolvedScheme.maturity_days} días`} />
-                  <F label="Mínimo activados" value={resolvedScheme.min_activated} bold />
-                  <F label="Regla base" value={RULE_LABELS[resolvedScheme.activation_rule] || resolvedScheme.activation_rule} />
-                  <F label="Regla calidad" value={RULE_LABELS[resolvedScheme.quality_rule] || resolvedScheme.quality_rule} />
-                  <F label="Fórmula" value={FORMULA_LABELS[resolvedScheme.formula_type] || resolvedScheme.formula_type} />
+                  <F label="Esquema" value={`${SCHEME_TYPE_LABELS[resolvedScheme.scheme_type] || resolvedScheme.scheme_type} \u00b7 ${resolvedScheme.version_name}`} bold />
+                  <F label="Cohorte" value={`${resolvedScheme.valid_from_cohort_iso_week} \u2192 ${resolvedScheme.valid_to_cohort_iso_week || 'vigente'}`} mono />
+                  <F label="Hito volumen" value={RULE_LABELS[resolvedScheme.volume_rule || resolvedScheme.activation_rule] || resolvedScheme.volume_rule || resolvedScheme.activation_rule} bold />
+                  <F label="Hito calidad" value={RULE_LABELS[resolvedScheme.counts_quality_rule || resolvedScheme.quality_rule] || resolvedScheme.counts_quality_rule || resolvedScheme.quality_rule} bold />
+                  <F label="Min. volumen" value={resolvedScheme.min_volume_count || resolvedScheme.min_activated} bold />
+                  <F label="Base pagable" value={PAYS_ON_LABELS[resolvedScheme.pays_on_rule] || resolvedScheme.pays_on_rule || '\u2014'} />
+                  <F label="Formula" value={FORMULA_LABELS[resolvedScheme.payout_formula_type || resolvedScheme.formula_type] || resolvedScheme.payout_formula_type || resolvedScheme.formula_type} bold />
+                  <F label="Ventana mad." value={`${resolvedScheme.maturity_window_days || resolvedScheme.maturity_days} dias`} />
                   <F label="Moneda" value={resolvedScheme.currency} />
                   {resolvedScheme.tiers.length > 0 && (
-                    <F label="Tiers" value={resolvedScheme.tiers.map(t => `${(t.min_conversion_rate * 100).toFixed(0)}% → S/${t.payout_amount.toFixed(0)}`).join(' | ')} />
+                    <F label="Tiers" value={resolvedScheme.tiers.map(t => (t.min_conversion_rate * 100).toFixed(0) + '% \u2192 S/' + t.payout_amount.toFixed(0)).join(' | ')} />
                   )}
-                </Section>
+              </Section>
               )}
+              <Section title="Acciones manuales">
+                <div className="px-3 py-2 space-y-2">
+                  <div className="flex flex-wrap gap-1">
+                    <button onClick={() => openOverride('assign_scout')} className="px-2 py-1 text-[10px] bg-blue-100 text-blue-700 rounded hover:bg-blue-200 font-medium">Asignar scout</button>
+                    <button onClick={() => openOverride('force_exclude')} className="px-2 py-1 text-[10px] bg-red-100 text-red-700 rounded hover:bg-red-200 font-medium">Excluir del pago</button>
+                    <button onClick={() => openOverride('force_pay')} className="px-2 py-1 text-[10px] bg-purple-100 text-purple-700 rounded hover:bg-purple-200 font-medium">Pago manual</button>
+                    <button onClick={() => openOverride('send_review')} className="px-2 py-1 text-[10px] bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 font-medium">Enviar a revisión</button>
+                  </div>
+                  {overrideAction === 'force_pay' && (
+                    <div className="text-[10px] text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-1">
+                      Esto creara un pago manual fuera de la regla automatica y bloqueara doble pago futuro.
+                    </div>
+                  )}
+                  {driverOverrides.length > 0 && (
+                    <div className="border-t border-gray-200 pt-1 mt-1">
+                      <div className="text-[10px] text-gray-400 uppercase mb-1">Historial</div>
+                      {driverOverrides.slice(0, 5).map(o => (
+                        <div key={o.id} className="text-[10px] text-gray-600 flex gap-2 py-0.5">
+                          <span className="font-medium w-20 truncate">{o.override_type}</span>
+                          <span className="w-12">{o.status}</span>
+                          <span className="text-gray-400 truncate flex-1">{o.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </Section>
               <Section title="Pago">
                 <F label="Estado" value={selectedRow.payment_status} bold />
                 <F label="Origen" value={PAYMENT_ORIGIN_LABELS[selectedRow.payment_origin] || selectedRow.payment_origin} />
@@ -689,15 +825,17 @@ export default function OperationView() {
                 <F label="Paid History ID" value={selectedRow.paid_history_id} />
               </Section>
               <Section title="Explicación financiera">
-                <F label="Cuenta para base activada" value={selectedRow.counts_as_activated_base ? 'Sí' : 'No'} />
-                <F label="Cuenta para calidad 5V/7D" value={selectedRow.counts_as_quality_5v7d ? 'Sí' : 'No'} />
+                <F label="Cuenta para volumen" value={selectedRow.counts_as_activated_base ? 'Sí' : 'No'} />
+                <F label="Cuenta para calidad" value={selectedRow.counts_as_quality_5v7d ? 'Sí' : 'No'} />
                 <F label="Cuenta para pago" value={selectedRow.counts_for_payment ? 'Sí' : 'No'} bold />
-                <F label="Activados scout" value={selectedRow.scout_activated_base} bold />
-                <F label="5V/7D scout" value={selectedRow.scout_quality_5v7d} bold />
+                <F label="Volumen scout" value={selectedRow.scout_activated_base} bold />
+                <F label="Calidad scout" value={selectedRow.scout_quality_5v7d} bold />
                 <F label="Conversión scout" value={`${(selectedRow.scout_conversion_rate_5v7d * 100).toFixed(1)}%`} />
                 <F label="Tier alcanzado" value={selectedRow.scout_tier_amount > 0 ? `S/${selectedRow.scout_tier_amount.toFixed(0)}` : 'Ninguno'} bold />
                 {selectedRow.scout_tier_amount > 0 && selectedRow.counts_for_payment && (
-                  <F label="Fórmula" value={`${selectedRow.scout_activated_base} activados \u00d7 S/${selectedRow.scout_tier_amount.toFixed(0)} = S/${(selectedRow.scout_activated_base * selectedRow.scout_tier_amount).toFixed(0)}`} />
+                  <F label="Fórmula" value={resolvedScheme
+                    ? `${FORMULA_LABELS[resolvedScheme.payout_formula_type || resolvedScheme.formula_type] || resolvedScheme.payout_formula_type || resolvedScheme.formula_type}: ${selectedRow.scout_activated_base} x S/${selectedRow.scout_tier_amount.toFixed(0)} = S/${(selectedRow.scout_activated_base * selectedRow.scout_tier_amount).toFixed(0)}`
+                    : `${selectedRow.scout_activated_base} activados x S/${selectedRow.scout_tier_amount.toFixed(0)} = S/${(selectedRow.scout_activated_base * selectedRow.scout_tier_amount).toFixed(0)}`} />
                 )}
                 {!selectedRow.counts_for_payment && selectedRow.payment_formula_label && (
                   <F label="Fórmula" value={selectedRow.payment_formula_label} />

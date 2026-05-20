@@ -532,6 +532,14 @@ class PaymentSchemeVersion(Base):
     quality_rule = Column(String(50), nullable=False, default="5V7D")
     formula_type = Column(String(50), nullable=False, default="ACTIVATED_X_TIER")
     currency = Column(String(3), nullable=False, default="PEN")
+    # ── Campos semanticos multi-esquema ──
+    volume_rule = Column(String(50), nullable=True)
+    min_volume_count = Column(Integer, nullable=True)
+    pays_on_rule = Column(String(50), nullable=True)
+    payout_formula_type = Column(String(50), nullable=True)
+    counts_volume_rule = Column(String(50), nullable=True)
+    counts_quality_rule = Column(String(50), nullable=True)
+    maturity_window_days = Column(Integer, nullable=True)
     status = Column(String(20), nullable=False, default="draft")
     created_at = Column(DateTime, server_default=func.now())
     activated_at = Column(DateTime, nullable=True)
@@ -560,3 +568,30 @@ class PaymentSchemeTier(Base):
     sort_order = Column(Integer, default=0)
 
     version = relationship("PaymentSchemeVersion", back_populates="tiers")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MANUAL OVERRIDES
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ManualOverride(Base):
+    __tablename__ = "scout_liq_manual_overrides"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    driver_id = Column(String(100), nullable=False)
+    cohort_iso_week = Column(String(20), nullable=True)
+    scout_id_before = Column(Integer, nullable=True)
+    scout_id_after = Column(Integer, nullable=True)
+    override_type = Column(String(50), nullable=False)
+    amount = Column(Numeric(10, 2), nullable=True)
+    currency = Column(String(3), default="PEN")
+    reason = Column(Text, nullable=False)
+    notes = Column(Text, nullable=True)
+    created_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    approved_by = Column(String(100), nullable=True)
+    approved_at = Column(DateTime, nullable=True)
+    status = Column(String(20), nullable=False, default="pending")
+    blocks_future_payment = Column(Boolean, default=False)
+    paid_history_id = Column(Integer, nullable=True)
+    metadata_json = Column(Text, nullable=True)

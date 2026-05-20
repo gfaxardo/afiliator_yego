@@ -632,10 +632,17 @@ class ResolvedPaymentScheme(BaseModel):
     valid_from_cohort_iso_week: str = ""
     valid_to_cohort_iso_week: Optional[str] = None
     maturity_days: int = 7
+    maturity_window_days: int = 7
     min_activated: int = 8
+    min_volume_count: int = 8
     activation_rule: str = "1V7D"
+    volume_rule: str = "1V7D"
     quality_rule: str = "5V7D"
+    counts_volume_rule: str = "1V7D"
+    counts_quality_rule: str = "5V7D"
     formula_type: str = "ACTIVATED_X_TIER"
+    pays_on_rule: str = "ACTIVATED_BASE"
+    payout_formula_type: str = "ACTIVATED_X_TIER"
     currency: str = "PEN"
     tiers: List[TierItem] = []
 
@@ -680,10 +687,17 @@ class CreateVersionRequest(BaseModel):
     version_name: str
     valid_from_cohort_iso_week: str
     maturity_days: int = 7
+    maturity_window_days: Optional[int] = None
     min_activated: int = 8
+    min_volume_count: Optional[int] = None
     activation_rule: str = "1V7D"
+    volume_rule: Optional[str] = None
     quality_rule: str = "5V7D"
+    counts_volume_rule: Optional[str] = None
+    counts_quality_rule: Optional[str] = None
     formula_type: str = "ACTIVATED_X_TIER"
+    pays_on_rule: Optional[str] = None
+    payout_formula_type: Optional[str] = None
     currency: str = "PEN"
     tiers: List[TierInput]
 
@@ -712,3 +726,38 @@ class SchemeCreatedResponse(BaseModel):
     scheme_id: int
     name: str = ""
     scheme_type: str = ""
+
+
+# ── Manual Overrides ──
+
+class ManualOverrideResponse(BaseModel):
+    id: int
+    driver_id: str = ""
+    cohort_iso_week: Optional[str] = None
+    scout_id_before: Optional[int] = None
+    scout_id_after: Optional[int] = None
+    override_type: str = ""
+    amount: Optional[float] = None
+    currency: str = "PEN"
+    reason: str = ""
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[str] = None
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    status: str = "pending"
+    blocks_future_payment: bool = False
+    paid_history_id: Optional[int] = None
+
+
+class CreateManualOverrideRequest(BaseModel):
+    driver_id: str
+    override_type: str
+    reason: str
+    cohort_iso_week: Optional[str] = None
+    scout_id: Optional[int] = None
+    scout_id_before: Optional[int] = None
+    amount: Optional[float] = None
+    currency: str = "PEN"
+    notes: Optional[str] = None
+    created_by: Optional[str] = None

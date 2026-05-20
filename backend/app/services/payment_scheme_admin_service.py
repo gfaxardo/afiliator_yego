@@ -93,10 +93,17 @@ def get_payment_scheme_detail(db: Session, scheme_id: int) -> Dict[str, Any]:
             "valid_from_cohort_iso_week": v.valid_from_cohort_iso_week,
             "valid_to_cohort_iso_week": v.valid_to_cohort_iso_week,
             "maturity_days": v.maturity_days,
+            "maturity_window_days": v.maturity_window_days or v.maturity_days,
             "min_activated": v.min_activated,
+            "min_volume_count": v.min_volume_count or v.min_activated,
             "activation_rule": v.activation_rule,
+            "volume_rule": v.volume_rule or v.activation_rule,
             "quality_rule": v.quality_rule,
+            "counts_volume_rule": v.counts_volume_rule or v.activation_rule,
+            "counts_quality_rule": v.counts_quality_rule or v.quality_rule,
             "formula_type": v.formula_type,
+            "pays_on_rule": v.pays_on_rule or "",
+            "payout_formula_type": v.payout_formula_type or v.formula_type,
             "currency": v.currency,
             "status": v.status,
             "created_at": str(v.created_at) if v.created_at else None,
@@ -174,6 +181,13 @@ def create_payment_scheme_version(
     formula_type: str,
     currency: str,
     tiers: List[Dict[str, Any]],
+    volume_rule: Optional[str] = None,
+    min_volume_count: Optional[int] = None,
+    pays_on_rule: Optional[str] = None,
+    payout_formula_type: Optional[str] = None,
+    counts_volume_rule: Optional[str] = None,
+    counts_quality_rule: Optional[str] = None,
+    maturity_window_days: Optional[int] = None,
 ) -> Dict[str, Any]:
     scheme = db.query(PaymentScheme).filter(PaymentScheme.id == scheme_id).first()
     if not scheme:
@@ -210,6 +224,13 @@ def create_payment_scheme_version(
         quality_rule=quality_rule,
         formula_type=formula_type,
         currency=currency,
+        volume_rule=volume_rule or activation_rule,
+        min_volume_count=min_volume_count or min_activated,
+        pays_on_rule=pays_on_rule or ("ACTIVATED_BASE" if formula_type == "ACTIVATED_X_TIER" else "QUALITY_HIT" if formula_type == "QUALITY_X_FIXED" else formula_type),
+        payout_formula_type=payout_formula_type or formula_type,
+        counts_volume_rule=counts_volume_rule or activation_rule,
+        counts_quality_rule=counts_quality_rule or quality_rule,
+        maturity_window_days=maturity_window_days or maturity_days,
         status="draft",
     )
     db.add(version)
@@ -274,7 +295,7 @@ def activate_payment_scheme_version(db: Session, version_id: int) -> Dict[str, A
         PaymentSchemeVersion.scheme_id == scheme_id,
         PaymentSchemeVersion.status == "active",
         PaymentSchemeVersion.id != version_id,
-    ).first()
+    ).order_by(PaymentSchemeVersion.valid_from_cohort_iso_week.desc()).first()
 
     if current_active:
         if version.valid_from_cohort_iso_week <= current_active.valid_from_cohort_iso_week:

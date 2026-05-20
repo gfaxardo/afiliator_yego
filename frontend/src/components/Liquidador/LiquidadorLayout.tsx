@@ -4,6 +4,7 @@ import { Outlet, NavLink, useLocation } from 'react-router-dom'
 const MAIN_TABS = [
   { to: '/scout-liq/operation', label: 'Operacion' },
   { to: '/scout-liq/dashboard', label: 'Dashboard' },
+  { to: '/scout-liq/liquidador', label: 'Liquidador' },
   { to: '/scout-liq/configuracion', label: 'Configuracion' },
 ]
 
@@ -12,7 +13,6 @@ const ADVANCED_TABS = [
   { to: '/scout-liq/workbook', label: 'Import Integral' },
   { to: '/scout-liq/attributions', label: 'Atribuciones' },
   { to: '/scout-liq/atribucion', label: 'Atribucion' },
-  { to: '/scout-liq/liquidador', label: 'Liquidador' },
   { to: '/scout-liq/manual-payments', label: 'Pagos Manuales' },
   { to: '/scout-liq/supervisor-bonus', label: 'Sup & Bonos' },
   { to: '/scout-liq/paid-history', label: 'Historial Pagos' },

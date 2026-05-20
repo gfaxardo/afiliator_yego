@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import {
   getQualityContract, getSchemes,
-  createCutoff, listCutoffs, getCutoffSummary, getCutoffLines,
+  createCutoff, createCutoffFromCohort, listCutoffs, getCutoffSummary, getCutoffLines,
   reviewCutoff, approveCutoff, markCutoffPaid,
+  getCutoffExportFinancialUrl, getOperationFilters,
 } from '../../api/scoutLiq'
 import type { SchemeResponse } from '../../api/scoutLiq'
 
 interface QualityContract { status: string; can_compute_trip_counts: boolean; uses_legacy_booleans_for_payment: boolean; sample_driver_trip_count: any; errors: string[] }
-interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string }
+interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string; cohort_iso_week?: string; cohort_from?: string; cohort_to?: string; maturity_days?: number; scheme_name?: string; scheme_type?: string; version_name?: string; min_activated?: number; activation_rule?: string; quality_rule?: string; snapshot_locked_at?: string }
 interface Summary { id: number; scout_id: number; scout_name: string; origin: string; total_affiliations: number; total_activated: number; drivers_1plus_0_7: number; drivers_5plus_0_7: number; drivers_1plus_8_14: number; drivers_5plus_0_14: number; total_converted_5v14d: number; not_converted: number; conversion_rate: number; conversion_rate_5v7d: number; conversion_5plus_0_7_rate: number; tier_reached: number; payment_per_converted_driver: number; payout_per_activated: number; amount_calculated: number; total_payable: number; status: string; blocked_reason: string; metric_used: string }
 interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string }
 
@@ -143,11 +144,22 @@ export default function LiquidadorView() {
   const [formTo, setFormTo] = useState('2026-05-15')
   const [formScheme, setFormScheme] = useState('')
   const [formOrigin, setFormOrigin] = useState('')
+  // Cohort-based creation mode
+  const [createMode, setCreateMode] = useState<'dates' | 'cohort'>('cohort')
+  const [formCohort, setFormCohort] = useState('')
+  const [formSchemeType, setFormSchemeType] = useState('cabinet')
+  const [cohorts, setCohorts] = useState<any[]>([])
 
   const load = () => {
     setLoading(true)
-    Promise.all([getQualityContract(), getSchemes(), listCutoffs()])
-      .then(([c, s, cuts]) => { setContract(c); setSchemes(s); setCutoffs(cuts); if (cuts.length > 0 && !formScheme) { setFormScheme(String(s[0]?.id || '')) } })
+    Promise.all([getQualityContract(), getSchemes(), listCutoffs(), getOperationFilters()])
+      .then(([c, s, cuts, filters]) => {
+        setContract(c); setSchemes(s); setCutoffs(cuts);
+        if (cuts.length > 0 && !formScheme) { setFormScheme(String(s[0]?.id || '')) }
+        if (filters?.weeks?.length) {
+          setCohorts(filters.weeks.map((w: any) => ({ cohort_iso_week: `${w.year}-W${String(w.week).padStart(2, '0')}`, cohort_label: w.label })))
+        }
+      })
       .catch((err: any) => setError(err.response?.data?.detail || err.message))
       .finally(() => setLoading(false))
   }
@@ -195,16 +207,25 @@ export default function LiquidadorView() {
   const originOptions = [...new Set(lines.map(l => l.origin).filter(Boolean))].sort()
 
   const handleCreate = async () => {
-    if (!formName || !formFrom || !formTo || !formScheme) return
     setLoading(true)
     try {
-      await createCutoff({
-        cutoff_name: formName,
-        hire_date_from: formFrom,
-        hire_date_to: formTo,
-        scheme_id: parseInt(formScheme),
-        origin_filter: formOrigin || undefined,
-      })
+      if (createMode === 'cohort') {
+        if (!formCohort || !formSchemeType) { setError('Selecciona cohorte y tipo de esquema'); setLoading(false); return }
+        await createCutoffFromCohort({
+          cohort_iso_week: formCohort,
+          scheme_type: formSchemeType,
+          origin_filter: formOrigin || undefined,
+        })
+      } else {
+        if (!formName || !formFrom || !formTo || !formScheme) return
+        await createCutoff({
+          cutoff_name: formName,
+          hire_date_from: formFrom,
+          hire_date_to: formTo,
+          scheme_id: parseInt(formScheme),
+          origin_filter: formOrigin || undefined,
+        })
+      }
       load()
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message)
@@ -224,7 +245,7 @@ export default function LiquidadorView() {
   }
 
   const exportCsv = (id: number) => {
-    window.open(`/api/scout-liq/cutoffs/${id}/export.csv`, '_blank')
+    window.open(getCutoffExportFinancialUrl(id), '_blank')
   }
 
   if (loading && !contract) return <div className="text-gray-500 p-4">Cargando...</div>
@@ -258,26 +279,62 @@ export default function LiquidadorView() {
 
       {/* Create cutoff form */}
       <div className="bg-white border rounded-lg p-6">
-        <h2 className="font-semibold mb-4">Crear Corte</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Nombre</label><input value={formName} onChange={e => setFormName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Desde</label><input type="date" value={formFrom} onChange={e => setFormFrom(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Hasta</label><input type="date" value={formTo} onChange={e => setFormTo(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Esquema</label>
-            <select value={formScheme} onChange={e => setFormScheme(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-              <option value="">Seleccionar...</option>
-              {schemes.filter(s => s.active).map(s => <option key={s.id} value={s.id}>{s.scheme_name}</option>)}
-            </select>
-          </div>
-          <div><label className="block text-xs font-medium text-gray-500 mb-1">Origen</label>
-            <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-              <option value="">Todos</option><option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
-            </select>
-          </div>
-          <div className="flex items-end">
-            <button onClick={handleCreate} disabled={!formScheme} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">Generar Corte</button>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold">Crear Corte</h2>
+          <div className="flex gap-1">
+            <button onClick={() => setCreateMode('cohort')}
+              className={`px-3 py-1 text-xs rounded ${createMode === 'cohort' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              Desde Cohorte
+            </button>
+            <button onClick={() => setCreateMode('dates')}
+              className={`px-3 py-1 text-xs rounded ${createMode === 'dates' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              Por Fechas
+            </button>
           </div>
         </div>
+        {createMode === 'cohort' ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Cohorte ISO</label>
+              <select value={formCohort} onChange={e => setFormCohort(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+                <option value="">Seleccionar...</option>
+                {cohorts.map((c: any) => <option key={c.cohort_iso_week} value={c.cohort_iso_week}>{c.cohort_label || c.cohort_iso_week}</option>)}
+              </select>
+            </div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Tipo Esquema</label>
+              <select value={formSchemeType} onChange={e => setFormSchemeType(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+                <option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
+              </select>
+            </div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Origen (opcional)</label>
+              <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+                <option value="">Todos</option><option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <button onClick={handleCreate} disabled={!formCohort} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">Crear desde Cohorte</button>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Nombre</label><input value={formName} onChange={e => setFormName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Desde</label><input type="date" value={formFrom} onChange={e => setFormFrom(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Hasta</label><input type="date" value={formTo} onChange={e => setFormTo(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Esquema</label>
+              <select value={formScheme} onChange={e => setFormScheme(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+                <option value="">Seleccionar...</option>
+                {schemes.filter(s => s.active).map(s => <option key={s.id} value={s.id}>{s.scheme_name}</option>)}
+              </select>
+            </div>
+            <div><label className="block text-xs font-medium text-gray-500 mb-1">Origen</label>
+              <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+                <option value="">Todos</option><option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <button onClick={handleCreate} disabled={!formScheme} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">Generar Corte</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Cutoff list */}
@@ -285,21 +342,33 @@ export default function LiquidadorView() {
         <div className="bg-white border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b"><tr>
-              <th className="text-left p-3">ID</th><th className="text-left p-3">Nombre</th><th className="text-left p-3">Rango</th><th className="text-left p-3">Estado</th><th className="text-left p-3">Data</th><th className="text-left p-3">Acciones</th>
+              <th className="text-left p-3">ID</th><th className="text-left p-3">Nombre</th><th className="text-left p-3">Cohorte</th><th className="text-left p-3">Esquema</th><th className="text-left p-3">Estado</th><th className="text-left p-3">Acciones</th>
             </tr></thead>
             <tbody>
               {cutoffs.map(c => (
                 <tr key={c.id} className="border-t hover:bg-gray-50">
                   <td className="p-3 font-mono text-xs">{c.id}</td>
                   <td className="p-3 font-medium cursor-pointer text-blue-700 hover:underline" onClick={() => loadCutoffDetails(c.id)}>{c.cutoff_name}</td>
-                  <td className="p-3 text-xs">{c.hire_date_from} → {c.hire_date_to}</td>
-                  <td className="p-3"><span className={`px-2 py-0.5 rounded text-xs ${c.status === 'draft' ? 'bg-gray-100' : c.status === 'calculated' ? 'bg-blue-100 text-blue-700' : c.status === 'approved' ? 'bg-green-100 text-green-700' : c.status === 'paid' ? 'bg-purple-100 text-purple-700' : 'bg-yellow-100 text-yellow-700'}`}>{c.status}</span></td>
-                  <td className="p-3 text-xs">{c.quality_data_contract_status}</td>
+                  <td className="p-3 text-xs">
+                    {c.cohort_iso_week ? (
+                      <span className="font-mono">{c.cohort_iso_week}</span>
+                    ) : (
+                      <span className="text-gray-400">{c.hire_date_from} → {c.hire_date_to}</span>
+                    )}
+                  </td>
+                  <td className="p-3 text-xs">
+                    {c.scheme_name ? (
+                      <span>{c.scheme_name} <span className="text-gray-400">{c.version_name}</span></span>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
+                  <td className="p-3"><span className={`px-2 py-0.5 rounded text-xs ${c.status === 'draft' ? 'bg-gray-100' : c.status === 'calculated' ? 'bg-blue-100 text-blue-700' : c.status === 'reviewed' ? 'bg-yellow-100 text-yellow-700' : c.status === 'approved' ? 'bg-green-100 text-green-700' : c.status === 'paid' ? 'bg-purple-100 text-purple-700' : 'bg-yellow-100 text-yellow-700'}`}>{c.status}</span></td>
                   <td className="p-3 flex gap-1 flex-wrap">
                     <button onClick={() => loadCutoffDetails(c.id)} className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs hover:bg-gray-200">Ver</button>
-                    {c.status === 'calculated' && <button onClick={() => action(reviewCutoff, c.id, 'review')} className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs hover:bg-yellow-200">Revisar</button>}
-                    {c.status === 'reviewed' && contract?.can_compute_trip_counts && <button onClick={() => action(approveCutoff, c.id, 'approve')} className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs hover:bg-green-200">Aprobar</button>}
-                    {c.status === 'approved' && <button onClick={() => action(markCutoffPaid, c.id, 'paid')} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200">Pagar</button>}
+                    {c.status === 'calculated' && <button onClick={() => action(reviewCutoff, c.id, 'Revisar')} className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs hover:bg-yellow-200">Revisar</button>}
+                    {c.status === 'reviewed' && contract?.can_compute_trip_counts && <button onClick={() => action(approveCutoff, c.id, 'Aprobar')} className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs hover:bg-green-200">Aprobar</button>}
+                    {c.status === 'approved' && <button onClick={() => action(markCutoffPaid, c.id, 'Pagar')} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200">Pagar</button>}
                     <button onClick={() => exportCsv(c.id)} className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs hover:bg-gray-200">CSV</button>
                   </td>
                 </tr>
@@ -312,6 +381,22 @@ export default function LiquidadorView() {
       {/* Summary */}
       {selectedCutoff && summaries.length > 0 && (
         <div>
+          {(() => {
+            const c = cutoffs.find(x => x.id === selectedCutoff)
+            if (!c?.scheme_name) return null
+            return (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs space-y-1">
+                <div className="font-semibold text-blue-800">Regla aplicada: {c.scheme_name} · {c.version_name}</div>
+                <div className="text-blue-600">
+                  Cohorte: {c.cohort_iso_week || `${c.hire_date_from} → ${c.hire_date_to}`}
+                  {c.maturity_days ? ` · Maduración: ${c.maturity_days} días` : ''}
+                  {c.min_activated ? ` · Mín activados: ${c.min_activated}` : ''}
+                </div>
+                {c.activation_rule && <div className="text-blue-500">Base: {c.activation_rule} · Calidad: {c.quality_rule}</div>}
+                {c.snapshot_locked_at && <div className="text-gray-400">Snapshot: {c.snapshot_locked_at?.replace('T', ' ').slice(0, 19)}</div>}
+              </div>
+            )
+          })()}
           <h3 className="font-semibold mb-3">Resumen por Scout (Corte #{selectedCutoff})</h3>
           <div className="bg-white border rounded-lg overflow-x-auto">
             <table className="w-full text-xs">

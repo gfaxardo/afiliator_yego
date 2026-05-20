@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.config import settings
+from app.services.manual_override_service import get_applied_overrides_for_drivers
 
 SOURCE_TABLE = settings.SOURCE_TABLE
 STATEMENT_TIMEOUT = "SET LOCAL statement_timeout = '15000ms'"
@@ -170,6 +171,9 @@ def get_canonical_operation_snapshot(
 
     # ── 4. Paid history overlay ──
     paid_map = _batch_paid_history(db, driver_ids)
+
+    # ── 4b. Manual overrides ──
+    override_map = get_applied_overrides_for_drivers(db, driver_ids)
     t4 = _time.perf_counter()
 
     # ── 5. Freshness ──
@@ -312,6 +316,28 @@ def get_canonical_operation_snapshot(
 
         # Check paid history first (per driver)
         for it in group["items"]:
+            # ── Manual overrides tienen prioridad ──
+            overrides = override_map.get(it["driver_id"], [])
+            for ov in overrides:
+                if ov["override_type"] == "force_exclude":
+                    it["payment_status"] = "not_payable"
+                    it["reason"] = "manual_exclude"
+                    it["payment_trace_status"] = "blocked_manual_exclude"
+                    it["payment_trace_warning"] = "Excluido manualmente"
+                    it["payment_basis_label"] = "manual_exclude"
+                elif ov["override_type"] == "force_pay":
+                    it["payment_status"] = "paid"
+                    it["reason"] = "manual_force_pay"
+                    it["payment_origin"] = "manual_override"
+                    it["amount"] = ov["amount"]
+                    it["paid_history_id"] = ov.get("paid_history_id")
+                    it["payment_rule_label"] = "Pago manual autorizado"
+                    it["payment_evidence_label"] = "manual_override"
+                    it["payment_trace_status"] = "paid_manual_override"
+                    it["payment_trace_warning"] = "Pago manual autorizado — no salio de la regla automatica"
+                    it["payment_basis_label"] = "manual_force_pay"
+
+            # ── Paid history ──
             payments_list = paid_map.get(it["driver_id"], [])
             if payments_list:
                 latest = payments_list[0]

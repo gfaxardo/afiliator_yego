@@ -37,6 +37,7 @@ from app.services.cutoff_engine import (
     approve_cutoff,
     mark_cutoff_paid,
     create_cutoff_from_cohort,
+    export_cutoff_financial_csv,
 )
 from app.services.historical_import_service import (
     preview_historical_import,
@@ -101,6 +102,14 @@ from app.services.payment_scheme_admin_service import (
     archive_payment_scheme_version,
     get_payment_schemes_history,
 )
+from app.services.manual_override_service import (
+    create_manual_override,
+    approve_manual_override,
+    apply_manual_override,
+    reject_manual_override,
+    list_manual_overrides,
+    get_driver_overrides,
+)
 from app.services.dashboard_service import (
     get_dashboard_overview, get_dashboard_by_scout, get_dashboard_by_week,
     get_dashboard_quality_funnel, get_dashboard_alerts, get_cutoff_trend,
@@ -140,6 +149,8 @@ from app.schemas.scout_liq import (
     VersionCreatedResponse,
     VersionActivatedResponse,
     SchemeCreatedResponse,
+    ManualOverrideResponse,
+    CreateManualOverrideRequest,
 )
 
 router = APIRouter(prefix="/scout-liq", tags=["scout-liq"])
@@ -788,7 +799,36 @@ def cutoff_summary(cutoff_id: int, db: Session = Depends(get_db)):
     return get_cutoff_summary(db, cutoff_id)
 
 
+    return get_cutoff_lines(db, cutoff_id, scout_id)
+
+
 @router.get("/cutoffs/{cutoff_id}/lines")
+def cutoff_lines(
+    cutoff_id: int,
+    scout_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    return get_cutoff_lines(db, cutoff_id, scout_id)
+
+
+@router.get("/cutoffs/{cutoff_id}/export-financial.csv")
+def export_cutoff_financial(
+    cutoff_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Export financiero auditable para un cutoff en formato CSV.
+    Usa config_snapshot congelado, NO el resolver dinamico.
+    """
+    try:
+        csv_content = export_cutoff_financial_csv(db, cutoff_id)
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=cutoff_{cutoff_id}_financial.csv"},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 def cutoff_lines(
     cutoff_id: int,
     scout_id: Optional[int] = Query(None),
@@ -2293,6 +2333,13 @@ def api_create_payment_scheme_version(
             formula_type=body.formula_type,
             currency=body.currency,
             tiers=[t.model_dump() for t in body.tiers],
+            volume_rule=body.volume_rule,
+            min_volume_count=body.min_volume_count,
+            pays_on_rule=body.pays_on_rule,
+            payout_formula_type=body.payout_formula_type,
+            counts_volume_rule=body.counts_volume_rule,
+            counts_quality_rule=body.counts_quality_rule,
+            maturity_window_days=body.maturity_window_days,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -2321,6 +2368,77 @@ def api_archive_payment_scheme_version(
     """Archiva una version draft. No se puede archivar versiones activas o usadas por cortes."""
     try:
         return archive_payment_scheme_version(db, version_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════
+# MANUAL OVERRIDES — Acciones manuales auditables
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/manual-overrides", response_model=List[ManualOverrideResponse])
+def api_list_manual_overrides(
+    driver_id: Optional[str] = None,
+    override_type: Optional[str] = None,
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    return list_manual_overrides(db, driver_id=driver_id, override_type=override_type, status=status)
+
+
+@router.get("/drivers/{driver_id}/manual-overrides", response_model=List[ManualOverrideResponse])
+def api_get_driver_overrides(driver_id: str, db: Session = Depends(get_db)):
+    return get_driver_overrides(db, driver_id)
+
+
+@router.post("/manual-overrides", response_model=ManualOverrideResponse)
+def api_create_manual_override(
+    body: CreateManualOverrideRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        return create_manual_override(
+            db,
+            driver_id=body.driver_id,
+            override_type=body.override_type,
+            reason=body.reason,
+            cohort_iso_week=body.cohort_iso_week,
+            scout_id=body.scout_id,
+            scout_id_before=body.scout_id_before,
+            amount=body.amount,
+            currency=body.currency,
+            notes=body.notes,
+            created_by=body.created_by,
+            auto_approve=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/manual-overrides/{override_id}/approve", response_model=ManualOverrideResponse)
+def api_approve_manual_override(
+    override_id: int,
+    approved_by: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        return approve_manual_override(db, override_id, approved_by)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/manual-overrides/{override_id}/apply", response_model=ManualOverrideResponse)
+def api_apply_manual_override(override_id: int, db: Session = Depends(get_db)):
+    try:
+        return apply_manual_override(db, override_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/manual-overrides/{override_id}/reject", response_model=ManualOverrideResponse)
+def api_reject_manual_override(override_id: int, db: Session = Depends(get_db)):
+    try:
+        return reject_manual_override(db, override_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
