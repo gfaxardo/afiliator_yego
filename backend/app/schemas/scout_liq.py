@@ -807,6 +807,7 @@ class UnifiedLoadPreviewResponse(BaseModel):
     supervisors_to_create: int = 0
     assignments_to_create: int = 0
     assignments_to_change: int = 0
+    assignments_already_exist: int = 0
     payments_to_create: int = 0
     already_paid: int = 0
     amount_mismatch: int = 0
@@ -826,6 +827,10 @@ class UnifiedLoadApplyDetail(BaseModel):
     payment_created: bool = False
     assignment_created: bool = False
     what_happened: Optional[List[str]] = None
+    action_requested: Optional[str] = None
+    action_executed: Optional[str] = None
+    skipped_reason: Optional[str] = None
+    existing_assignment_id: Optional[int] = None
 
 
 class UnifiedLoadApplyResponse(BaseModel):
@@ -833,3 +838,9 @@ class UnifiedLoadApplyResponse(BaseModel):
     skipped: int = 0
     errors: int = 0
     details: List[UnifiedLoadApplyDetail] = []
+    assignments_new: int = 0
+    assignments_existing: int = 0
+    payments_new: int = 0
+    payments_existing: int = 0
+    commit_ok: Optional[bool] = None
+    commit_error: Optional[str] = None

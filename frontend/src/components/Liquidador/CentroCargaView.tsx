@@ -3,6 +3,10 @@ import {
   downloadTemplate,
   previewUnifiedLoadStream,
   applyUnifiedLoadStream,
+  downloadPreviewReport,
+  downloadApplyReport,
+  fetchPreviewResult,
+  downloadRescueCsv,
   type UnifiedPreviewResponse,
   type UnifiedPreviewLine,
   type UnifiedApplyResponse,
@@ -18,6 +22,7 @@ const ACTION_LABELS: Record<string, string> = {
   create_scout: 'Crear Scout', assign_scout: 'Asignar Scout',
   assign_to_new_scout: 'Asignar a Nuevo Scout', reassign_scout: 'Reasignar',
   create_payment: 'Crear Pago', already_paid: 'Ya Pagado',
+  already_assigned: 'Ya Asignado',
   attribution_only: 'Solo Atribucion', driver_not_found: 'Driver No Encontrado',
 }
 
@@ -25,6 +30,7 @@ const ACTION_COLORS: Record<string, string> = {
   create_scout: 'bg-purple-100 text-purple-700', assign_scout: 'bg-blue-100 text-blue-700',
   assign_to_new_scout: 'bg-blue-100 text-blue-700', reassign_scout: 'bg-orange-100 text-orange-700',
   create_payment: 'bg-green-100 text-green-700', already_paid: 'bg-yellow-100 text-yellow-700',
+  already_assigned: 'bg-gray-200 text-gray-600',
   attribution_only: 'bg-gray-100 text-gray-600', driver_not_found: 'bg-red-100 text-red-700',
 }
 
@@ -55,6 +61,11 @@ export default function CentroCargaView() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [activeStep, setActiveStep] = useState<number>(0)
+  const [progressMsg, setProgressMsg] = useState<string>('')
+
+  // ── Preview stream lines collected for audit ──
+  const [previewLines, setPreviewLines] = useState<any[]>([])
+  const [previewId, setPreviewId] = useState<string | null>(null)
 
   // ── Paso 1: Descargar plantilla ──
   const handleDownloadTemplate = useCallback(async () => {
@@ -77,12 +88,20 @@ export default function CentroCargaView() {
   const handlePreview = useCallback(async (file: File) => {
     setLoading(true); setError(null); setPreview(null); setApplyResult(null)
     setStreamLines([]); setStreamProgress({ valid: 0, errors: 0, total: 0 })
+    setPreviewLines([]); setProgressMsg('')
     pendingFileRef.current = file
+
+    // Timeout watchdog
+    const timeoutRef = { current: setTimeout(() => {
+      setProgressMsg('No llegan eventos del servidor. Revisar backend/logs.')
+    }, 30000) }
 
     await previewUnifiedLoadStream(
       file,
       (line) => {
+        clearTimeout(timeoutRef.current)
         setStreamLines(prev => [...prev, line])
+        setPreviewLines(prev => [...prev, line])
         setStreamProgress(p => ({
           valid: line.valid_rows ?? p.valid,
           errors: line.error_rows ?? p.errors,
@@ -90,6 +109,9 @@ export default function CentroCargaView() {
         }))
       },
       (summary) => {
+        clearTimeout(timeoutRef.current)
+        const pid = summary.preview_id || null
+        setPreviewId(pid)
         setPreview({
           total_rows: summary.total_rows,
           valid_rows: summary.valid_rows,
@@ -101,22 +123,40 @@ export default function CentroCargaView() {
           supervisors_to_create: summary.supervisors_to_create,
           assignments_to_create: summary.assignments_to_create,
           assignments_to_change: summary.assignments_to_change,
+          assignments_already_exist: summary.assignments_already_exist || 0,
           payments_to_create: summary.payments_to_create,
           already_paid: summary.already_paid,
           amount_mismatch: summary.amount_mismatch || 0,
           warnings: [],
           lines: [],
-          apply_plan: summary.apply_plan || [],
+          apply_plan: [],  // fetched via preview_id
           parse_metadata: {},
         })
         setLoading(false)
+        setProgressMsg('')
         setActiveStep(2)
       },
       (err) => {
+        clearTimeout(timeoutRef.current)
         setError(err)
         setLoading(false)
+        setProgressMsg('')
+      },
+      (event) => {
+        clearTimeout(timeoutRef.current)
+        timeoutRef.current = setTimeout(() => {
+          setProgressMsg('No llegan eventos del servidor. Revisar backend/logs.')
+        }, 30000)
+        if (event.type === 'started') setProgressMsg('Archivo recibido...')
+        else if (event.type === 'file_parsed') setProgressMsg(`${event.rows} filas detectadas`)
+        else if (event.type === 'caches_loading') setProgressMsg('Cargando datos del sistema...')
+        else if (event.type === 'caches_progress') setProgressMsg(`Cargando ${event.phase}...`)
+        else if (event.type === 'caches_loaded')
+          setProgressMsg(`Datos cargados: ${event.scouts} scouts, ${event.drivers} drivers, ${event.active_assignments} asignaciones`)
+        else if (event.type === 'processing_started') setProgressMsg(`Procesando ${event.total} filas...`)
       },
     )
+    clearTimeout(timeoutRef.current)
   }, [])
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,13 +167,23 @@ export default function CentroCargaView() {
   // ── Apply detail lines collected from stream ──
   const [applyLines, setApplyLines] = useState<any[]>([])
 
-  // ── Paso 4: Aplicar (envia apply_plan, no archivo) ──
+  // ── Paso 4: Aplicar (fetch plan from preview_id, then stream apply) ──
   const handleApply = useCallback(async () => {
-    const plan = preview?.apply_plan
-    if (!plan || plan.length === 0) return
+    if (!previewId) return
     setLoading(true); setError(null); setApplyResult(null)
     setStreamLines([]); setStreamProgress({ valid: 0, errors: 0, total: 0 })
     setApplyLines([])
+
+    let plan: any[] = []
+    try {
+      const result = await fetchPreviewResult(previewId)
+      plan = result?.apply_plan || []
+    } catch (e: any) {
+      setError('Error al obtener plan: ' + (e?.message || ''))
+      setLoading(false)
+      return
+    }
+    if (!plan || plan.length === 0) { setLoading(false); return }
 
     await applyUnifiedLoadStream(
       plan,
@@ -152,6 +202,10 @@ export default function CentroCargaView() {
           skipped: summary.skipped,
           errors: summary.errors || 0,
           details: [],
+          assignments_new: summary.assignments_new || 0,
+          assignments_existing: summary.assignments_existing || 0,
+          payments_new: summary.payments_new || 0,
+          payments_existing: summary.payments_existing || 0,
           commit_ok: summary.commit_ok !== false,
           commit_error: summary.commit_error || null,
         })
@@ -165,7 +219,7 @@ export default function CentroCargaView() {
         setLoading(false)
       },
     )
-  }, [preview])
+  }, [previewId])
 
   // ── Contraste: Exportar estado sistema ──
   const handleExportSystemState = useCallback(async () => {
@@ -201,6 +255,46 @@ export default function CentroCargaView() {
       setLoading(false)
     }
   }, [reconFilters])
+
+  // ── Descargar reportes de auditoria ──
+  const handleDownloadPreviewReport = useCallback(async () => {
+    const file = pendingFileRef.current
+    if (!file) return
+    try {
+      const blob = await downloadPreviewReport(file)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = 'reporte_preview_carga.csv'; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      setError('Error al descargar reporte de preview')
+    }
+  }, [])
+
+  const handleDownloadApplyReport = useCallback(async () => {
+    try {
+      const blob = await downloadApplyReport(previewLines, applyLines)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = 'reporte_final_carga.csv'; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      setError('Error al descargar reporte de apply')
+    }
+  }, [previewLines, applyLines])
+
+  const handleDownloadRescue = useCallback(async () => {
+    if (!previewId) return
+    try {
+      const blob = await downloadRescueCsv(previewId)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = 'pendientes_correccion.csv'; a.click()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      setError('Error al descargar pendientes')
+    }
+  }, [previewId])
 
   const filteredLines = preview?.lines?.filter((l: UnifiedPreviewLine) => {
     return l.status !== 'error'
@@ -256,7 +350,7 @@ export default function CentroCargaView() {
           </label>
 
           {/* Paso 4: Aplicar */}
-          {preview && preview.valid_rows > 0 && !applyResult && (
+          {preview && preview.valid_rows > 0 && previewId && !applyResult && (
             <div className="flex items-center gap-2">
               <button onClick={handleApply} disabled={loading}
                 className="px-4 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50">
@@ -273,13 +367,29 @@ export default function CentroCargaView() {
         {(loading || streamLines.length > 0) && (
           <div className="mt-3 bg-gray-900 text-green-400 font-mono text-[11px] rounded-lg p-3 max-h-[300px] overflow-y-auto">
             <div className="text-gray-500 mb-1">
-              {loading ? 'Procesando...' : 'Completado'} [{streamProgress.valid} OK, {streamProgress.errors} errores de {streamProgress.total}]
+              {progressMsg || (loading ? 'Procesando...' : 'Completado')} [{streamProgress.valid} OK, {streamProgress.errors} errores de {streamProgress.total}]
             </div>
             {streamLines.slice(-25).map((l, i) => (
               <div key={i} className={l.status === 'error' ? 'text-red-400' : l.status === 'warning' ? 'text-yellow-400' : 'text-green-400'}>
                 [{String(l.source_row).padStart(4, ' ')}] {String(l.licencia || '---').padEnd(16, ' ')} {l.status === 'error' ? 'ERR' : l.status === 'warning' ? 'WRN' : 'OK '} {(l.deduced_actions || []).join(', ') || (l.errors?.[0] || '')}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* ── Fallback preview button ── */}
+        {loading && !streamLines.length && progressMsg.includes('No llegan') && (
+          <div className="mt-2">
+            <button onClick={() => {
+              const file = pendingFileRef.current
+              if (file) {
+                setError(null)
+                handlePreview(file)
+              }
+            }}
+              className="px-3 py-1 text-xs bg-yellow-600 text-white rounded hover:bg-yellow-700">
+              Reintentar con preview normal
+            </button>
           </div>
         )}
 
@@ -317,6 +427,26 @@ export default function CentroCargaView() {
                   {(applyResult as any).commit_error}
                 </div>
               )}
+
+              {/* Breakdown stats */}
+              <div className="mt-3 grid grid-cols-4 gap-2 text-xs">
+                <div className="bg-white rounded border p-2 text-center">
+                  <div className="font-bold text-blue-700">{applyResult.assignments_new}</div>
+                  <div className="text-gray-500">Asignaciones nuevas</div>
+                </div>
+                <div className="bg-white rounded border p-2 text-center">
+                  <div className="font-bold text-gray-600">{applyResult.assignments_existing}</div>
+                  <div className="text-gray-500">Asignaciones ya existentes</div>
+                </div>
+                <div className="bg-white rounded border p-2 text-center">
+                  <div className="font-bold text-green-700">{applyResult.payments_new}</div>
+                  <div className="text-gray-500">Pagos nuevos</div>
+                </div>
+                <div className="bg-white rounded border p-2 text-center">
+                  <div className="font-bold text-yellow-600">{applyResult.payments_existing}</div>
+                  <div className="text-gray-500">Ya pagados</div>
+                </div>
+              </div>
             </div>
 
             {/* Categorized breakdown */}
@@ -325,12 +455,18 @@ export default function CentroCargaView() {
                 {/* Group by status */}
                 {(() => {
                   const applied = applyLines.filter((l: any) => l.status === 'applied')
-                  const skipped = applyLines.filter((l: any) => l.status === 'skipped')
+                  const skippedExisting = applyLines.filter((l: any) => l.status === 'skipped_existing')
+                  const otherSkipped = applyLines.filter((l: any) => l.status === 'skipped' && l.status !== 'skipped_existing')
                   const errors = applyLines.filter((l: any) => l.status === 'error')
 
-                  // Group skipped by reason
+                  // Group skipped_existing by reason
                   const byReason: Record<string, any[]> = {}
-                  for (const l of skipped) {
+                  for (const l of skippedExisting) {
+                    const r = l.reason || 'desconocido'
+                    if (!byReason[r]) byReason[r] = []
+                    byReason[r].push(l)
+                  }
+                  for (const l of otherSkipped) {
                     const r = l.reason || 'desconocido'
                     if (!byReason[r]) byReason[r] = []
                     byReason[r].push(l)
@@ -351,7 +487,8 @@ export default function CentroCargaView() {
                                   <th className="text-left px-2 py-1">#</th>
                                   <th className="text-left px-2 py-1">Driver</th>
                                   <th className="text-left px-2 py-1">Scout</th>
-                                  <th className="text-left px-2 py-1">Que se hizo</th>
+                                  <th className="text-left px-2 py-1">Accion solicitada</th>
+                                  <th className="text-left px-2 py-1">Accion ejecutada</th>
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-100">
@@ -360,11 +497,12 @@ export default function CentroCargaView() {
                                     <td className="px-2 py-1 text-gray-400">{l.source_row}</td>
                                     <td className="px-2 py-1 font-mono">{l.driver_id || l.licencia || '-'}</td>
                                     <td className="px-2 py-1">{l.scout || '-'}</td>
-                                    <td className="px-2 py-1 text-green-700">{(l.what_happened || []).join(' | ')}</td>
+                                    <td className="px-2 py-1 text-gray-600">{l.action_requested || '-'}</td>
+                                    <td className="px-2 py-1 text-green-700">{l.action_executed || (l.what_happened || []).join(' | ')}</td>
                                   </tr>
                                 ))}
                                 {applied.length > 50 && (
-                                  <tr><td colSpan={4} className="text-center text-gray-400 py-1">... y {applied.length - 50} mas</td></tr>
+                                  <tr><td colSpan={5} className="text-center text-gray-400 py-1">... y {applied.length - 50} mas</td></tr>
                                 )}
                               </tbody>
                             </table>
@@ -373,10 +511,10 @@ export default function CentroCargaView() {
                       )}
 
                       {/* Skipped grouped by reason */}
-                      {skipped.length > 0 && (
+                      {(skippedExisting.length > 0 || otherSkipped.length > 0) && (
                         <details className="text-xs">
                           <summary className="font-medium text-yellow-700 cursor-pointer">
-                            {skipped.length} saltadas — agrupadas por motivo
+                            {skippedExisting.length + otherSkipped.length} saltadas — agrupadas por motivo
                           </summary>
                           <div className="mt-2 space-y-2">
                             {Object.entries(byReason).map(([reason, lines]) => (
@@ -390,6 +528,9 @@ export default function CentroCargaView() {
                                       <tr>
                                         <th className="text-left px-2 py-1">#</th>
                                         <th className="text-left px-2 py-1">Licencia</th>
+                                        <th className="text-left px-2 py-1">Accion solicitada</th>
+                                        <th className="text-left px-2 py-1">Accion ejecutada</th>
+                                        <th className="text-left px-2 py-1">Asignacion ID</th>
                                       </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-100">
@@ -397,10 +538,13 @@ export default function CentroCargaView() {
                                         <tr key={i}>
                                           <td className="px-2 py-1 text-gray-400">{l.source_row}</td>
                                           <td className="px-2 py-1 font-mono">{l.licencia || '-'}</td>
+                                          <td className="px-2 py-1 text-gray-600">{l.action_requested || '-'}</td>
+                                          <td className="px-2 py-1 text-yellow-700">{l.action_executed || l.reason || '-'}</td>
+                                          <td className="px-2 py-1 text-gray-400">{l.existing_assignment_id || '-'}</td>
                                         </tr>
                                       ))}
                                       {lines.length > 30 && (
-                                        <tr><td colSpan={2} className="text-center text-gray-400 py-1">... y {lines.length - 30} mas</td></tr>
+                                        <tr><td colSpan={5} className="text-center text-gray-400 py-1">... y {lines.length - 30} mas</td></tr>
                                       )}
                                     </tbody>
                                   </table>
@@ -422,6 +566,7 @@ export default function CentroCargaView() {
                               <thead className="bg-red-50 sticky top-0">
                                 <tr>
                                   <th className="text-left px-2 py-1">#</th>
+                                  <th className="text-left px-2 py-1">Accion solicitada</th>
                                   <th className="text-left px-2 py-1">Error</th>
                                 </tr>
                               </thead>
@@ -429,6 +574,7 @@ export default function CentroCargaView() {
                                 {errors.slice(0, 20).map((l: any, i: number) => (
                                   <tr key={i} className="bg-red-50">
                                     <td className="px-2 py-1 text-gray-400">{l.source_row}</td>
+                                    <td className="px-2 py-1 text-gray-600">{l.action_requested || '-'}</td>
                                     <td className="px-2 py-1 text-red-600">{l.reason}</td>
                                   </tr>
                                 ))}
@@ -442,6 +588,19 @@ export default function CentroCargaView() {
                 })()}
               </>
             )}
+          </div>
+        )}
+
+        {/* ── Botón descargar reporte final ── */}
+        {applyResult && applyLines.length > 0 && (
+          <div className="mt-3 flex items-center gap-2">
+            <button onClick={handleDownloadApplyReport}
+              className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">
+              Descargar reporte final de carga
+            </button>
+            <span className="text-[10px] text-gray-400">
+              CSV con resultado de apply, saltos, motivos y sugerencias
+            </span>
           </div>
         )}
 
@@ -510,12 +669,71 @@ export default function CentroCargaView() {
               </div>
             )}
 
+            {/* ── KPI Cards ── */}
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mb-3">
+              <MiniStat label="Total filas" value={preview.total_rows} color="gray" />
+              <MiniStat label="Rescatables" value={preview.error_rows + preview.drivers_not_found} color="orange" />
+              <MiniStat label="Perdidas" value={preview.duplicate_rows} color="red" />
+              <MiniStat label="Match %" value={preview.total_rows > 0 ? Math.round((preview.drivers_found / preview.total_rows) * 100) : 0} color="blue" />
+              <MiniStat label="Ya existentes" value={preview.assignments_already_exist} color="yellow" />
+              <MiniStat label="Nuevos inserts" value={preview.assignments_to_create + preview.assignments_to_change + preview.payments_to_create} color="green" />
+            </div>
+
+            {/* ── Classification + Exports ── */}
+            <div className="flex flex-wrap gap-2 mb-3">
+              {preview.drivers_not_found > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-red-100 text-red-700">
+                  No encontrados: {preview.drivers_not_found}
+                </span>
+              )}
+              {preview.assignments_already_exist > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-gray-200 text-gray-600">
+                  Ya asignados: {preview.assignments_already_exist}
+                </span>
+              )}
+              {preview.already_paid > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-yellow-100 text-yellow-700">
+                  Ya pagados: {preview.already_paid}
+                </span>
+              )}
+              {preview.error_rows > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-red-100 text-red-700">
+                  Errores: {preview.error_rows}
+                </span>
+              )}
+              {preview.duplicate_rows > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-red-100 text-red-700">
+                  Duplicados: {preview.duplicate_rows}
+                </span>
+              )}
+              {(preview.assignments_to_create + preview.assignments_to_change + preview.payments_to_create) > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded bg-green-100 text-green-700">
+                  Aplicados: {preview.assignments_to_create + preview.assignments_to_change + preview.payments_to_create}
+                </span>
+              )}
+            </div>
+
+            {/* ── Quick export buttons ── */}
+            {previewId && (
+              <div className="flex flex-wrap gap-2 mb-3">
+                <button onClick={handleDownloadPreviewReport}
+                  className="px-3 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                  Descargar reporte completo
+                </button>
+                <button onClick={handleDownloadRescue}
+                  className="px-3 py-1 text-xs bg-orange-600 text-white rounded hover:bg-orange-700">
+                  Exportar solo pendientes
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
               <MiniStat label="Filas" value={preview.total_rows} color="gray" />
               <MiniStat label="Listas" value={preview.valid_rows} color="green" />
               <MiniStat label="Errores" value={preview.error_rows} color="red" />
               <MiniStat label="Pagos" value={preview.payments_to_create} color="green" />
               <MiniStat label="Asignaciones" value={preview.assignments_to_create + preview.assignments_to_change} color="blue" />
+              <MiniStat label="Ya asignados" value={preview.assignments_already_exist} color="gray" />
               <MiniStat label="Scouts nuevos" value={preview.scouts_to_create} color="purple" />
               <MiniStat label="Ya pagados" value={preview.already_paid} color="yellow" />
               <MiniStat label="No encontrados" value={preview.drivers_not_found} color="orange" />
@@ -611,6 +829,33 @@ export default function CentroCargaView() {
                 </div>
               </details>
             )}
+            {/* ── Timeline steps ── */}
+            <div className="flex flex-wrap gap-2 text-[10px] text-gray-400 mt-2">
+              <span className={preview ? 'text-green-600 font-medium' : ''}>1. Archivo</span>
+              <span>→</span>
+              <span className={preview ? 'text-green-600 font-medium' : ''}>2. Columnas</span>
+              <span>→</span>
+              <span className={preview ? 'text-green-600 font-medium' : ''}>3. Sistema</span>
+              <span>→</span>
+              <span className={preview ? 'text-green-600 font-medium' : ''}>4. Match</span>
+              <span>→</span>
+              <span className={preview ? 'text-green-600 font-medium' : ''}>5. Validacion</span>
+              <span>→</span>
+              <span className={applyResult ? 'text-green-600 font-medium' : ''}>6. Aplicado</span>
+            </div>
+          </div>
+        )}
+
+        {/* ── Botón descargar reporte de preview ── */}
+        {preview && preview.total_rows > 0 && (
+          <div className="mt-3 flex items-center gap-2">
+            <button onClick={handleDownloadPreviewReport}
+              className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">
+              Descargar reporte de preview
+            </button>
+            <span className="text-[10px] text-gray-400">
+              CSV con diagnostico por licencia, sugerencias y matches
+            </span>
           </div>
         )}
       </div>

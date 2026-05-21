@@ -123,6 +123,9 @@ from app.services.unified_load_service import (
     unified_apply,
     unified_preview_stream,
     unified_apply_stream,
+    generate_preview_audit_csv,
+    generate_apply_audit_csv,
+    _get_preview,
     _parse_rows_from_csv,
     _parse_rows_from_xlsx,
 )
@@ -2643,27 +2646,40 @@ def unified_load_preview_stream(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    """Streaming preview: devuelve NDJSON fila por fila para ver progreso en tiempo real."""
+    """Streaming preview: devuelve NDJSON con eventos progresivos."""
     content = file.file.read()
-
-    if file.filename and file.filename.lower().endswith(".xlsx"):
-        rows, errors = _parse_rows_from_xlsx(content)
-    else:
-        try:
-            text = content.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            text = content.decode("latin-1")
-        rows, errors, parse_metadata = _parse_rows_from_csv(text)
-
-    if parse_metadata.get("structural_error"):
-        def error_stream():
-            yield json.dumps({"type": "structural_error", **parse_metadata}) + "\n"
-        return StreamingResponse(error_stream(), media_type="application/x-ndjson")
-
-    if not rows:
-        raise HTTPException(status_code=400, detail="Archivo vacio o sin filas de datos")
+    filename = file.filename or "archivo.csv"
+    parse_metadata: dict = {}
 
     def generate():
+        yield json.dumps({"type": "started", "filename": filename}) + "\n"
+
+        if filename.lower().endswith(".xlsx"):
+            rows, errors = _parse_rows_from_xlsx(content)
+            columns = []
+        else:
+            try:
+                text = content.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = content.decode("latin-1")
+            rows, errors, parse_metadata = _parse_rows_from_csv(text)
+            columns = parse_metadata.get("columns_detected", [])
+
+        if parse_metadata.get("structural_error"):
+            yield json.dumps({"type": "structural_error", **parse_metadata}) + "\n"
+            yield json.dumps({"type": "summary", "total_rows": 0, "valid_rows": 0,
+                              "error_rows": 0, "done": True}) + "\n"
+            return
+
+        if not rows:
+            yield json.dumps({"type": "error", "message": "Archivo vacio o sin filas de datos"}) + "\n"
+            yield json.dumps({"type": "summary", "total_rows": 0, "valid_rows": 0,
+                              "error_rows": 0, "done": True}) + "\n"
+            return
+
+        yield json.dumps({"type": "file_parsed", "rows": len(rows),
+                          "columns": columns}) + "\n"
+
         for event in unified_preview_stream(db, rows):
             yield json.dumps(event, default=str) + "\n"
 
@@ -2696,6 +2712,7 @@ def unified_load_preview(
             "drivers_found": 0, "drivers_not_found": 0,
             "scouts_to_create": 0, "supervisors_to_create": 0,
             "assignments_to_create": 0, "assignments_to_change": 0,
+            "assignments_already_exist": 0,
             "payments_to_create": 0, "already_paid": 0, "amount_mismatch": 0,
             "warnings": errors, "lines": [],
             "parse_metadata": parse_metadata,
@@ -2763,3 +2780,107 @@ async def unified_load_apply_stream(
 
     return StreamingResponse(generate(), media_type="application/x-ndjson",
                              headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
+@router.post("/unified-load/report/preview")
+def unified_load_preview_report(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Descarga reporte de auditoria del preview en formato CSV."""
+    content = file.file.read()
+    parse_metadata: dict = {}
+
+    if file.filename and file.filename.lower().endswith(".xlsx"):
+        rows, errors = _parse_rows_from_xlsx(content)
+    else:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+        rows, errors, parse_metadata = _parse_rows_from_csv(text)
+
+    if parse_metadata.get("structural_error"):
+        raise HTTPException(status_code=400, detail="Error estructural en archivo: " + str(parse_metadata))
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Archivo vacio o sin filas de datos")
+
+    csv_content = generate_preview_audit_csv(db, rows)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=reporte_preview_carga.csv",
+            "Content-Type": "text/csv; charset=utf-8-sig",
+        },
+    )
+
+
+@router.post("/unified-load/report/apply")
+async def unified_load_apply_report(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Descarga reporte de auditoria del apply combinando preview + apply en formato CSV."""
+    body = await request.json()
+    preview_lines = body.get("preview_lines", [])
+    apply_lines = body.get("apply_lines", [])
+
+    if not preview_lines:
+        raise HTTPException(status_code=400, detail="preview_lines vacio o ausente")
+
+    csv_content = generate_apply_audit_csv(preview_lines, apply_lines)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=reporte_final_carga.csv",
+            "Content-Type": "text/csv; charset=utf-8-sig",
+        },
+    )
+
+
+@router.get("/unified-load/preview-result/{preview_id}")
+def get_preview_result(preview_id: str):
+    """Recupera el resultado completo del preview (apply_plan + lines) por ID."""
+    data = _get_preview(preview_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Preview expirado o no encontrado")
+    return data
+
+
+@router.get("/unified-load/rescue-csv/{preview_id}")
+def get_rescue_csv(preview_id: str):
+    """Descarga CSV con solo las filas pendientes de correccion (errores + no encontrados)."""
+    data = _get_preview(preview_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Preview expirado o no encontrado")
+    
+    lines = data.get("lines", [])
+    rescues = [l for l in lines if l.get("status") in ("error", "warning") 
+               or "driver_not_found" in l.get("deduced_actions", [])
+               or l.get("preview_status") == "error"]
+    
+    import io as _io, csv as _csv
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["licencia", "scout", "supervisor", "origen", "suggested_fix", "errors"])
+    for l in rescues:
+        src = l.get("source_row", "")
+        lic = l.get("licencia", "")
+        scout = l.get("scout", "")
+        sup = l.get("supervisor", "")
+        origen = l.get("origen", "")
+        fix = l.get("suggested_fix", "")
+        errs = "; ".join(l.get("errors", []))
+        w.writerow([lic, scout, sup, origen, fix, errs])
+    
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=pendientes_correccion.csv",
+            "Content-Type": "text/csv; charset=utf-8-sig",
+        },
+    )
