@@ -70,6 +70,13 @@ def _seed_payment_scheme(
     formula_type: str,
     currency: str,
     tiers_data: list,
+    volume_rule: str = None,
+    pays_on_rule: str = None,
+    payout_formula_type: str = None,
+    counts_volume_rule: str = None,
+    counts_quality_rule: str = None,
+    maturity_window_days: int = None,
+    min_volume_count: int = None,
 ):
     scheme = db.query(PaymentScheme).filter(
         PaymentScheme.name == name,
@@ -99,6 +106,13 @@ def _seed_payment_scheme(
         quality_rule=quality_rule,
         formula_type=formula_type,
         currency=currency,
+        volume_rule=volume_rule or activation_rule,
+        pays_on_rule=pays_on_rule,
+        payout_formula_type=payout_formula_type or formula_type,
+        counts_volume_rule=counts_volume_rule or activation_rule,
+        counts_quality_rule=counts_quality_rule or quality_rule,
+        maturity_window_days=maturity_window_days or maturity_days,
+        min_volume_count=min_volume_count or min_activated,
         status="active",
         activated_at=datetime.now(),
     )
@@ -144,6 +158,9 @@ def seed():
                 (0.30, 30),
                 (0.40, 40),
             ],
+            volume_rule="1V7D",
+            pays_on_rule="ACTIVATED_BASE",
+            payout_formula_type="ACTIVATED_X_TIER",
         )
 
         _seed_payment_scheme(
@@ -164,6 +181,9 @@ def seed():
                 (0.50, 80),
                 (0.75, 120),
             ],
+            volume_rule="50V30D",
+            pays_on_rule="QUALITY_HIT",
+            payout_formula_type="QUALITY_X_FIXED",
         )
 
     except Exception as e:

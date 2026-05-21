@@ -5,6 +5,7 @@ NO usa booleanos para calculo de pago.
 """
 
 import json
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
@@ -89,6 +90,32 @@ def create_cutoff_run(
     return run
 
 
+def _parse_rule(rule_str: str):
+    """
+    Parse a volume/quality rule string like '1V7D' or '50V30D'.
+    Returns (min_count, window_days). Defaults to (1, 7) if unparseable.
+    """
+    if not rule_str:
+        return (1, 7)
+    m = re.match(r'(\d+)V(\d+)D', str(rule_str).strip(), re.IGNORECASE)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    return (1, 7)
+
+
+def _get_trip_count_for_window(trip_counts: dict, driver_id: str, window_days: int) -> int:
+    tc = trip_counts.get(driver_id, {})
+    if window_days <= 7:
+        return tc.get("trips_0_7_count", 0) or 0
+    if window_days <= 14:
+        t7 = tc.get("trips_0_7_count", 0) or 0
+        t14 = tc.get("trips_8_14_count", 0) or 0
+        return t7 + t14
+    if window_days <= 30:
+        return tc.get("trips_0_30_count", 0) or 0
+    return tc.get("trips_0_30_count", 0) or 0
+
+
 def _compute_lifecycle(trips_0_7: int, trips_8_14: int, trips_0_14: int) -> str:
     if trips_0_7 == 0 and trips_0_14 == 0:
         return "no_trip"
@@ -114,6 +141,15 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     scheme = db.query(ConversionScheme).filter(ConversionScheme.id == config["scheme_id"]).first()
     tiers = sorted(config["tiers"], key=lambda t: t["min_conversion_rate"])
     min_aff = config.get("min_affiliations", 0)
+
+    # ── Multi-scheme rule parsing ──
+    volume_rule_str = config.get("volume_rule", config.get("activation_rule", "1V7D"))
+    quality_rule_str = config.get("quality_rule", "5V7D")
+    pays_on_rule = config.get("pays_on_rule", "") or "ACTIVATED_BASE"
+    payout_formula_type = config.get("payout_formula_type", config.get("formula_type", "ACTIVATED_X_TIER"))
+
+    vol_min, vol_days = _parse_rule(volume_rule_str)
+    qual_min, qual_days = _parse_rule(quality_rule_str)
 
     # Clean previous lines/summaries
     db.query(CutoffDriverLine).filter(CutoffDriverLine.cutoff_run_id == cutoff_run_id).delete()
@@ -228,32 +264,47 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
         total_aff = len(lines)
 
         has_valid_date = [l for l in lines if l.source_quality_status == "ok" and l.trips_0_7_count is not None]
+
+        # ── Multi-scheme: count volume_base and quality_hit per rule ──
+        drivers_volume_base = sum(
+            1 for l in has_valid_date
+            if _get_trip_count_for_window(trip_counts, l.driver_id, vol_days) >= vol_min
+        )
+        drivers_quality_hit = sum(
+            1 for l in has_valid_date
+            if _get_trip_count_for_window(trip_counts, l.driver_id, qual_days) >= qual_min
+        )
+
+        # Legacy counts (for backward compat display)
         drivers_1plus_0_7 = sum(1 for l in has_valid_date if (l.trips_0_7_count or 0) >= 1)
         drivers_5plus_0_7 = sum(1 for l in has_valid_date if (l.trips_0_7_count or 0) >= 5)
         drivers_1plus_8_14 = sum(1 for l in has_valid_date if (l.trips_8_14_count or 0) >= 1)
         drivers_5plus_0_14 = sum(1 for l in has_valid_date if (l.trips_0_14_count or 0) >= 5)
         not_converted = total_aff - drivers_5plus_0_7
 
-        # Conversion rate: converted_5v7d / ACTIVATED (not total affiliates)
-        total_activated = drivers_1plus_0_7
-        rate_5plus = Decimal(str(drivers_5plus_0_7 / total_activated)) if total_activated > 0 else Decimal("0")
+        # ── Conversion rate: quality / volume (multi-scheme) ──
+        total_activated = drivers_volume_base
+        rate_5plus = Decimal(str(drivers_quality_hit / total_activated)) if total_activated > 0 else Decimal("0")
         rate_1plus = Decimal(str(drivers_1plus_0_7 / total_aff)) if total_aff > 0 else Decimal("0")
         rate_5plus_14 = Decimal(str(drivers_5plus_0_14 / total_activated)) if total_activated > 0 else Decimal("0")
 
-        # Find applicable tier (based on conversion rate of activated drivers)
+        # Find applicable tier (based on conversion rate)
         tier_reached = None
         payment_per = Decimal("0")
         for t in tiers:
             if rate_5plus >= Decimal(str(t["min_conversion_rate"])):
                 tier_reached = t
-                payment_per = Decimal(str(t["payment_per_converted_driver"]))
+                payment_per = Decimal(str(t["payout_amount"] if "payout_amount" in t else t.get("payment_per_converted_driver", 0)))
 
+        # ── Block check: use min_volume_count (semantic) or min_affiliations (legacy) ──
+        min_volume = config.get("min_volume_count", min_aff)
         blocked_reason = None
-        if total_activated < min_aff:
-            blocked_reason = f"Minimo {min_aff} activados requerido, tiene {total_activated}"
+        if total_activated < min_volume:
+            blocked_reason = f"Minimo {min_volume} volumen requerido, tiene {total_activated}"
 
-        # Payment: activated_drivers × tier_amount (NOT converted × tier)
-        amount = Decimal(str(total_activated)) * payment_per if tier_reached and not blocked_reason else Decimal("0")
+        # ── Payment formula ──
+        pays_on_count = drivers_quality_hit if pays_on_rule == "QUALITY_HIT" else drivers_volume_base
+        amount = Decimal(str(pays_on_count)) * payment_per if tier_reached and not blocked_reason else Decimal("0")
 
         summary = CutoffScoutSummary(
             cutoff_run_id=cutoff_run_id,
@@ -292,6 +343,14 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             trips_8_14 = l.trips_8_14_count or 0
             trips_0_14 = l.trips_0_14_count or 0
 
+            # Multi-scheme: does this driver meet the payment rule?
+            trips_in_pay_window = _get_trip_count_for_window(
+                trip_counts, l.driver_id,
+                qual_days if pays_on_rule == "QUALITY_HIT" else vol_days
+            )
+            pay_threshold = qual_min if pays_on_rule == "QUALITY_HIT" else vol_min
+            driver_meets_pay_rule = trips_in_pay_window >= pay_threshold
+
             if l.source_quality_status != "ok":
                 l.line_status = "blocked_invalid_hire_date"
                 l.blocked_reason = "sin hire_date valida"
@@ -315,23 +374,28 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 l.is_converted_5trips_14d = (trips_0_7 + trips_8_14) >= 5
                 l.activated_flag = trips_0_7 >= 1
 
-                if tier_reached and trips_0_7 >= 1:
+                if tier_reached and driver_meets_pay_rule:
                     l.line_status = "payable"
                     l.payment_status = "payable"
                     l.payout_eligible_flag = True
                     l.calculated_amount = payment_per
-                    l.payment_rule = f"{tier_reached['min_conversion_rate']}% -> {payment_per} {tier_reached['currency']}"
+                    tier_rate = tier_reached.get("min_conversion_rate", 0)
+                    l.payment_rule = f"{tier_rate}% -> {payment_per} {tier_reached.get('currency', 'PEN')}"
                     l.eligible = True
-                elif trips_0_7 >= 1:
+                elif driver_meets_pay_rule:
                     l.line_status = "activated_no_tier"
                     l.payment_status = "blocked"
                     l.blocked_reason = "no_conversion_tier"
                     l.payout_eligible_flag = False
                     l.eligible = False
                 else:
-                    l.line_status = "no_trip"
+                    l.line_status = "no_trip" if trips_0_7 == 0 else "below_pay_threshold"
                     l.payment_status = "blocked"
-                    l.blocked_reason = "no_activation"
+                    l.blocked_reason = (
+                        f"no alcanza regla ({vol_min}V{vol_days}D)"
+                        if pays_on_rule == "ACTIVATED_BASE"
+                        else f"no alcanza calidad ({qual_min}V{qual_days}D)"
+                    )
                     l.payout_eligible_flag = False
                     l.eligible = False
 
@@ -620,6 +684,13 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
     payout_formula_type = config.get("payout_formula_type", formula_type)
     maturity_window_days = config.get("maturity_window_days", config.get("maturity_days", 0))
 
+    # Parse multi-scheme rules for export
+    volume_rule_str = config.get("volume_rule", config.get("activation_rule", "1V7D"))
+    quality_rule_str = config.get("quality_rule", "5V7D")
+    vol_min_export, vol_days_export = _parse_rule(volume_rule_str)
+    qual_min_export, qual_days_export = _parse_rule(quality_rule_str)
+    export_pays_on = pays_on_rule or "ACTIVATED_BASE"
+
     # Rows
     for l in lines:
         sid = l.scout_id
@@ -638,27 +709,40 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
             if conv_rate >= t.get("min_conversion_rate", 0):
                 tier_threshold = t.get("min_conversion_rate", 0)
         if tier_amount_val > 0:
-            formula_detail = f"activados({activated_base}) x tier({tier_amount_val}) = {activated_base * tier_amount_val:.0f}"
+            pay_count = quality_5v7d if export_pays_on == "QUALITY_HIT" else activated_base
+            formula_label = "calidad" if export_pays_on == "QUALITY_HIT" else "activados"
+            formula_detail = f"{formula_label}({pay_count}) x tier({tier_amount_val}) = {pay_count * tier_amount_val:.0f}"
 
         # Driver-level justification
         payment_origin = "cutoff_engine" if l.payout_eligible_flag else (
             "cutoff_blocked" if l.payment_status else "none"
         )
+        driver_meets_volume = _get_trip_count_for_window({l.driver_id: {
+            "trips_0_7_count": l.trips_0_7_count,
+            "trips_8_14_count": l.trips_8_14_count or 0,
+            "trips_0_30_count": l.trips_0_14_count or 0,
+        }}, l.driver_id, vol_days_export) >= vol_min_export
+        driver_meets_quality = _get_trip_count_for_window({l.driver_id: {
+            "trips_0_7_count": l.trips_0_7_count,
+            "trips_8_14_count": l.trips_8_14_count or 0,
+            "trips_0_30_count": l.trips_0_14_count or 0,
+        }}, l.driver_id, qual_days_export) >= qual_min_export
+
         payment_reason = l.blocked_reason or (
             "Pagable: scout alcanzo tier" if l.payout_eligible_flag else
-            ("No activado" if not l.activated_flag else "No pagable")
+            ("No cumple regla de pago" if not driver_meets_volume else "No pagable")
         )
         trace_status = "paid_confirmed" if l.payment_status == "paid" else (
             "payable_scout_tier" if l.payout_eligible_flag else
-            ("no_activation" if not l.activated_flag else
+            ("no_activation" if not driver_meets_volume else
              ("blocked_already_paid" if l.already_paid else
               ("blocked_min_activated" if l.blocked_reason and "Minimo" in (l.blocked_reason or "") else
                "blocked_no_tier")))
         )
         trace_warning = l.blocked_reason or ("" if l.payout_eligible_flag else "Verificar regla")
 
-        counts_base = bool(l.activated_flag and not l.already_paid)
-        counts_quality = bool(l.is_converted_5trips_7d and not l.already_paid)
+        counts_base = bool(driver_meets_volume and not l.already_paid)
+        counts_quality = bool(driver_meets_quality and not l.already_paid)
         counts_payment = bool(l.payout_eligible_flag)
 
         writer.writerow([

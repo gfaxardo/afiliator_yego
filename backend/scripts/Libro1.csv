@@ -1,0 +1,5 @@
+licencia;scout;supervisor;pagado;monto_pagado;fecha_pago;observacion;driver_id;nombre_conductor
+Q45406817;Scout Alfa;Juan Supervisor;SI;150.00;46148;Pago enero 2026;;Geovani Aedo
+Q99999999;Scout Beta;Maria L;SI;200.00;15/05/2026;Pago con fecha DD/MM;;Carlos Garcia
+Q87654321;Scout Gamma;Pedro;NO;0;2026-03-15;Solo atribucion;;
+LIC_MISSING;Scout Delta;Ana;SI;300.00;01/04/2026;Licencia inventada;;

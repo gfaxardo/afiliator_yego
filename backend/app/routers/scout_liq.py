@@ -7,8 +7,8 @@ import logging
 from typing import Optional, List
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, Request
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from decimal import Decimal
@@ -114,6 +114,18 @@ from app.services.dashboard_service import (
     get_dashboard_overview, get_dashboard_by_scout, get_dashboard_by_week,
     get_dashboard_quality_funnel, get_dashboard_alerts, get_cutoff_trend,
 )
+from app.services.reconciliation_service import (
+    export_reconciliation_csv,
+    compare_upload,
+)
+from app.services.unified_load_service import (
+    unified_preview,
+    unified_apply,
+    unified_preview_stream,
+    unified_apply_stream,
+    _parse_rows_from_csv,
+    _parse_rows_from_xlsx,
+)
 from app.schemas.scout_liq import (
     ScoutCreate,
     ScoutUpdate,
@@ -151,6 +163,9 @@ from app.schemas.scout_liq import (
     SchemeCreatedResponse,
     ManualOverrideResponse,
     CreateManualOverrideRequest,
+    ReconciliationCompareResponse,
+    UnifiedLoadPreviewResponse,
+    UnifiedLoadApplyResponse,
 )
 
 router = APIRouter(prefix="/scout-liq", tags=["scout-liq"])
@@ -2188,6 +2203,7 @@ def operation_canonical_snapshot(
     payment_status: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    scheme_type: Optional[str] = Query(None, description="cabinet | fleet | custom"),
     db: Session = Depends(get_db),
 ):
     """
@@ -2206,6 +2222,7 @@ def operation_canonical_snapshot(
         payment_status=payment_status,
         limit=limit,
         offset=offset,
+        scheme_type=scheme_type,
     )
 
 
@@ -2515,3 +2532,234 @@ def dashboard_alerts(
 @router.get("/dashboard/trend")
 def dashboard_trend(db: Session = Depends(get_db)):
     return get_cutoff_trend(db)
+
+
+# ═══════════════════════════════════════════════════════════
+# RECONCILIATION — Conciliacion operacional/financiera
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/reconciliation/export")
+def reconciliation_export(
+    hire_date_from: Optional[date] = Query(None),
+    hire_date_to: Optional[date] = Query(None),
+    scheme_type: Optional[str] = Query(None, description="cabinet | fleet | custom"),
+    pay_until_date: Optional[date] = Query(None),
+    only_matured: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """Exporta CSV de conciliacion con el estado esperado por el sistema."""
+    csv_content = export_reconciliation_csv(
+        db,
+        hire_date_from=hire_date_from,
+        hire_date_to=hire_date_to,
+        scheme_type=scheme_type,
+        pay_until_date=pay_until_date,
+        only_matured=only_matured,
+    )
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=reconciliation_export.csv",
+            "Content-Type": "text/csv; charset=utf-8-sig",
+        },
+    )
+
+
+@router.post("/reconciliation/compare-upload", response_model=ReconciliationCompareResponse)
+def reconciliation_compare_upload(
+    file: UploadFile = File(...),
+    hire_date_from: Optional[date] = Query(None),
+    hire_date_to: Optional[date] = Query(None),
+    scheme_type: Optional[str] = Query(None, description="cabinet | fleet | custom"),
+    db: Session = Depends(get_db),
+):
+    """Sube un CSV de pagos reales y lo compara contra el estado esperado del sistema."""
+    try:
+        content = file.file.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            file.file.seek(0)
+            content = file.file.read().decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=400, detail="No se pudo decodificar el archivo. Use CSV UTF-8.")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error al leer archivo: {e}")
+
+    result = compare_upload(
+        db,
+        csv_content=content,
+        hire_date_from=hire_date_from,
+        hire_date_to=hire_date_to,
+        scheme_type=scheme_type,
+    )
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return ReconciliationCompareResponse(**result)
+
+
+# ═══════════════════════════════════════════════════════════
+# UNIFIED LOAD — Carga unificada plana por licencia
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/unified-load/template")
+def unified_load_template():
+    """Descarga la plantilla simple CSV para carga unificada."""
+    import csv as _csv
+    buf = io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow([
+        "licencia", "scout", "supervisor",
+        "pagado", "monto_pagado", "fecha_pago", "observacion",
+        "driver_id", "nombre_conductor", "origen",
+        "tipo_scout", "motivo_pago", "cohorte_iso",
+    ])
+    writer.writerow([
+        "Q12345678", "Scout Alpha", "Juan Perez",
+        "SI", "150.00", "2026-01-15", "Pago enero",
+        "", "Carlos Garcia", "cabinet",
+        "destajo", "Conversion 40%", "2026-W03",
+    ])
+    writer.writerow([
+        "Q87654321", "Scout Beta", "Maria Lopez",
+        "NO", "0", "2026-01-15", "Solo atribucion",
+        "", "Ana Martinez", "fleet",
+        "", "", "",
+    ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=plantilla_unificada.csv",
+            "Content-Type": "text/csv; charset=utf-8-sig",
+        },
+    )
+
+
+@router.post("/unified-load/preview-stream")
+def unified_load_preview_stream(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Streaming preview: devuelve NDJSON fila por fila para ver progreso en tiempo real."""
+    content = file.file.read()
+
+    if file.filename and file.filename.lower().endswith(".xlsx"):
+        rows, errors = _parse_rows_from_xlsx(content)
+    else:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+        rows, errors, parse_metadata = _parse_rows_from_csv(text)
+
+    if parse_metadata.get("structural_error"):
+        def error_stream():
+            yield json.dumps({"type": "structural_error", **parse_metadata}) + "\n"
+        return StreamingResponse(error_stream(), media_type="application/x-ndjson")
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Archivo vacio o sin filas de datos")
+
+    def generate():
+        for event in unified_preview_stream(db, rows):
+            yield json.dumps(event, default=str) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson",
+                             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
+@router.post("/unified-load/preview", response_model=UnifiedLoadPreviewResponse)
+def unified_load_preview(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Sube CSV/XLSX y devuelve preview con acciones deducidas."""
+    content = file.file.read()
+    parse_metadata: dict = {}
+
+    if file.filename and file.filename.lower().endswith(".xlsx"):
+        rows, errors = _parse_rows_from_xlsx(content)
+    else:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+        rows, errors, parse_metadata = _parse_rows_from_csv(text)
+
+    # Structural error: return preview with metadata, NO HTTPException
+    if parse_metadata.get("structural_error"):
+        result = {
+            "total_rows": 0, "valid_rows": 0, "error_rows": 0,
+            "drivers_found": 0, "drivers_not_found": 0,
+            "scouts_to_create": 0, "supervisors_to_create": 0,
+            "assignments_to_create": 0, "assignments_to_change": 0,
+            "payments_to_create": 0, "already_paid": 0, "amount_mismatch": 0,
+            "warnings": errors, "lines": [],
+            "parse_metadata": parse_metadata,
+        }
+        return UnifiedLoadPreviewResponse(**result)
+
+    if not rows and errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Archivo vacio o sin filas de datos")
+
+    result = unified_preview(db, rows)
+    result["parse_metadata"] = parse_metadata
+
+    if errors:
+        result["warnings"] = result.get("warnings", []) + errors
+
+    return UnifiedLoadPreviewResponse(**result)
+
+
+@router.post("/unified-load/apply", response_model=UnifiedLoadApplyResponse)
+def unified_load_apply(
+    file: UploadFile = File(...),
+    applied_by: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Aplica solo lo validado en preview."""
+    content = file.file.read()
+
+    if file.filename and file.filename.lower().endswith(".xlsx"):
+        rows, errors = _parse_rows_from_xlsx(content)
+    else:
+        try:
+            text = content.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+        rows, errors, _ = _parse_rows_from_csv(text)
+
+    if not rows and errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+
+    if not rows:
+        raise HTTPException(status_code=400, detail="Archivo vacio o sin filas de datos")
+
+    result = unified_apply(db, rows, applied_by=applied_by)
+    return UnifiedLoadApplyResponse(**result)
+
+
+@router.post("/unified-load/apply-stream")
+async def unified_load_apply_stream(
+    request: Request,
+    applied_by: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Streaming apply: recibe apply_plan JSON del preview y lo ejecuta."""
+    body = await request.json()
+    plan = body.get("apply_plan", [])
+    if not plan:
+        raise HTTPException(status_code=400, detail="apply_plan vacio o ausente")
+
+    def generate():
+        for event in unified_apply_stream(db, plan, applied_by=applied_by):
+            yield json.dumps(event, default=str) + "\n"
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson",
+                             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})

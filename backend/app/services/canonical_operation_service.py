@@ -15,6 +15,7 @@ import time as _time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Tuple
+import re as _re
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -39,6 +40,49 @@ def _compute_lifecycle(trips_0_7: int, trips_8_14: int) -> str:
     trips_0_14 = trips_0_7 + trips_8_14
     if trips_0_7 == 0 and trips_0_14 == 0:
         return "no_trip"
+    if trips_0_7 >= 1 and trips_0_7 < 5:
+        if trips_0_14 >= 5:
+            return "converted_5v14d"
+        return "activated"
+    if trips_0_7 >= 5:
+        return "converted_5v7d"
+    if trips_0_14 >= 5:
+        return "converted_5v14d"
+    return "no_trip"
+
+
+def _parse_canonical_rule(rule_str: str):
+    if not rule_str:
+        return (1, 7)
+    m = _re.match(r'(\d+)V(\d+)D', str(rule_str).strip(), _re.IGNORECASE)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    return (1, 7)
+
+
+def _driver_meets_rule(trips: dict, min_count: int, window_days: int) -> bool:
+    if window_days <= 7:
+        return (trips.get("trips_0_7", 0) or 0) >= min_count
+    if window_days <= 14:
+        t7 = trips.get("trips_0_7", 0) or 0
+        t14 = trips.get("trips_8_14", 0) or 0
+        return (t7 + t14) >= min_count
+    if window_days <= 30:
+        return (trips.get("trips_0_30", 0) or 0) >= min_count
+    return (trips.get("trips_0_30", 0) or 0) >= min_count
+
+
+def _get_latest_iso_week(db: Session) -> Optional[str]:
+    try:
+        db.execute(text(STATEMENT_TIMEOUT))
+        row = db.execute(text(
+            "SELECT MAX(EXTRACT(ISOYEAR FROM hire_date::date)) || '-W' || "
+            "LPAD(MAX(EXTRACT(WEEK FROM hire_date::date))::text, 2, '0') "
+            f"FROM {SOURCE_TABLE} WHERE hire_date IS NOT NULL AND hire_date != ''"
+        )).scalar()
+        return row
+    except Exception:
+        return None
     if trips_0_7 >= 1 and trips_0_7 < 5:
         if trips_0_14 >= 5:
             return "converted_5v14d"
@@ -79,6 +123,7 @@ def get_canonical_operation_snapshot(
     payment_status: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    scheme_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     t0 = _time.perf_counter()
 
@@ -186,11 +231,12 @@ def get_canonical_operation_snapshot(
         did = dd["driver_id"]
 
         scout_info = scout_map.get(did, {})
-        trips = trip_map.get(did, {"trips_0_7": 0, "trips_8_14": 0})
+        trips = trip_map.get(did, {"trips_0_7": 0, "trips_8_14": 0, "trips_0_30": 0})
 
         trips_7d = trips.get("trips_0_7", 0) or 0
         trips_8_14 = trips.get("trips_8_14", 0) or 0
         trips_14d = trips_7d + trips_8_14
+        trips_0_30 = trips.get("trips_0_30", 0) or 0
         activated = trips_7d >= 1
         conv_7d = trips_7d >= 5
         conv_14d = trips_14d >= 5
@@ -225,6 +271,7 @@ def get_canonical_operation_snapshot(
             "attribution_status": attr_status,
             "trips_7d": trips_7d,
             "trips_14d": trips_14d,
+            "trips_0_30": trips_0_30,
             "activated_flag": activated,
             "converted_5v7d": conv_7d,
             "converted_5v14d": conv_14d,
@@ -259,10 +306,39 @@ def get_canonical_operation_snapshot(
 
     # ── 7. Compute scout group metrics + payment decision (second pass) ──
 
+    # ── Resolve multi-scheme rules if scheme_type provided ──
+    resolved_scheme = None
+    if scheme_type:
+        from app.services.payment_scheme_resolver import resolve_payment_scheme_for_cohort
+        latest_week = _get_latest_iso_week(db)
+        if latest_week:
+            try:
+                resolved_scheme = resolve_payment_scheme_for_cohort(db, latest_week, scheme_type)
+            except ValueError:
+                resolved_scheme = None
+
+    if resolved_scheme:
+        vol_min, vol_days = _parse_canonical_rule(resolved_scheme.get("volume_rule", "1V7D"))
+        qual_min, qual_days = _parse_canonical_rule(resolved_scheme.get("quality_rule", "5V7D"))
+        pays_on_rule = resolved_scheme.get("pays_on_rule", "") or "ACTIVATED_BASE"
+        payout_formula_type = resolved_scheme.get("payout_formula_type", "ACTIVATED_X_TIER")
+        min_volume = resolved_scheme.get("min_volume_count", resolved_scheme.get("min_activated", 8))
+        tiers_list = [
+            {"min_conversion_rate": t["min_conversion_rate"], "payment_per_converted_driver": t["payout_amount"], "currency": resolved_scheme.get("currency", "PEN")}
+            for t in resolved_scheme.get("tiers", [])
+        ]
+    else:
+        vol_min, vol_days = 1, 7
+        qual_min, qual_days = 5, 7
+        pays_on_rule = "ACTIVATED_BASE"
+        payout_formula_type = "ACTIVATED_X_TIER"
+        min_volume = 8
+        tiers_list = []
+
     # Group by scout
     scout_groups: Dict[int, Dict[str, Any]] = {}
     for it in items:
-        sid = it["scout_id"] or 0  # 0 = unassigned pool
+        sid = it["scout_id"] or 0
         if sid not in scout_groups:
             scout_groups[sid] = {"activated_count": 0, "quality_5v7d_count": 0, "items": []}
         if it["activated_flag"]:
@@ -271,41 +347,38 @@ def get_canonical_operation_snapshot(
             scout_groups[sid]["quality_5v7d_count"] += 1
         scout_groups[sid]["items"].append(it)
 
-    # Load active schemes and tiers
-    schemes = db.execute(text(
-        "SELECT id, scheme_name, origin, min_affiliations FROM scout_liq_conversion_schemes WHERE active = true"
-    )).fetchall()
-    tiers_rows = db.execute(text(
-        "SELECT scheme_id, min_conversion_rate, payment_per_converted_driver, currency FROM scout_liq_conversion_tiers WHERE active = true ORDER BY scheme_id, min_conversion_rate"
-    )).fetchall()
+    if not resolved_scheme:
+        # Legacy scheme path (when no scheme_type provided)
+        schemes = db.execute(text(
+            "SELECT id, scheme_name, origin, min_affiliations FROM scout_liq_conversion_schemes WHERE active = true"
+        )).fetchall()
+        tiers_rows = db.execute(text(
+            "SELECT scheme_id, min_conversion_rate, payment_per_converted_driver, currency FROM scout_liq_conversion_tiers WHERE active = true ORDER BY scheme_id, min_conversion_rate"
+        )).fetchall()
 
-    # Build tier lookup by scheme
-    scheme_tiers: Dict[int, list] = {}
-    for trow in tiers_rows:
-        sid = trow[0]
-        if sid not in scheme_tiers:
-            scheme_tiers[sid] = []
-        scheme_tiers[sid].append({
-            "min_conversion_rate": float(trow[1]),
-            "payment_per_converted_driver": float(trow[2]),
-            "currency": trow[3],
-        })
+        scheme_tiers: Dict[int, list] = {}
+        for trow in tiers_rows:
+            sid = trow[0]
+            if sid not in scheme_tiers:
+                scheme_tiers[sid] = []
+            scheme_tiers[sid].append({
+                "min_conversion_rate": float(trow[1]),
+                "payment_per_converted_driver": float(trow[2]),
+                "currency": trow[3],
+            })
 
-    # Build scheme map
-    scheme_map: Dict[int, dict] = {}
-    for srow in schemes:
-        scheme_map[srow[0]] = {
-            "id": srow[0], "scheme_name": srow[1], "origin": srow[2], "min_affiliations": srow[3] or 0,
-        }
+        scheme_map: Dict[int, dict] = {}
+        for srow in schemes:
+            scheme_map[srow[0]] = {
+                "id": srow[0], "scheme_name": srow[1], "origin": srow[2], "min_affiliations": srow[3] or 0,
+            }
 
-    # DEFAULT scheme (scheme_id=1: Cabinet Destajo Base, min=8)
-    default_scheme = scheme_map.get(1, {"id": 1, "scheme_name": "Default", "origin": None, "min_affiliations": 8})
-    default_tiers = scheme_tiers.get(1, [{"min_conversion_rate": 0.10, "payment_per_converted_driver": 10.0, "currency": "PEN"}])
+        default_scheme = scheme_map.get(1, {"id": 1, "scheme_name": "Default", "origin": None, "min_affiliations": 8})
+        default_tiers = scheme_tiers.get(1, [{"min_conversion_rate": 0.10, "payment_per_converted_driver": 10.0, "currency": "PEN"}])
 
     # Apply payment rules per scout group
     for sid, group in scout_groups.items():
         if sid == 0:
-            # Unassigned pool: all not_payable
             for it in group["items"]:
                 it["payment_status"] = "not_payable"
                 it["reason"] = "no_scout"
@@ -314,9 +387,7 @@ def get_canonical_operation_snapshot(
                 it["payment_basis_label"] = "no_scout"
             continue
 
-        # Check paid history first (per driver)
         for it in group["items"]:
-            # ── Manual overrides tienen prioridad ──
             overrides = override_map.get(it["driver_id"], [])
             for ov in overrides:
                 if ov["override_type"] == "force_exclude":
@@ -337,7 +408,6 @@ def get_canonical_operation_snapshot(
                     it["payment_trace_warning"] = "Pago manual autorizado — no salio de la regla automatica"
                     it["payment_basis_label"] = "manual_force_pay"
 
-            # ── Paid history ──
             payments_list = paid_map.get(it["driver_id"], [])
             if payments_list:
                 latest = payments_list[0]
@@ -352,26 +422,37 @@ def get_canonical_operation_snapshot(
                     it["payment_trace_status"] = "paid_confirmed"
 
         # Compute scout metrics (excluding already-paid drivers from base)
-        non_paid_activated = [it for it in group["items"] if it["activated_flag"] and it["payment_status"] != "paid"]
-        non_paid_quality = [it for it in non_paid_activated if it["converted_5v7d"]]
+        tripmap_lookup = trip_map
+        non_paid_volume = [
+            it for it in group["items"]
+            if _driver_meets_rule(tripmap_lookup.get(it["driver_id"], {}), vol_min, vol_days)
+            and it["payment_status"] != "paid"
+        ]
+        non_paid_quality = [
+            it for it in group["items"]
+            if _driver_meets_rule(tripmap_lookup.get(it["driver_id"], {}), qual_min, qual_days)
+            and it["payment_status"] != "paid"
+        ]
 
-        activated_base = len(non_paid_activated)
+        activated_base = len(non_paid_volume)
         quality_5v7d = len(non_paid_quality)
         conversion_rate = (quality_5v7d / activated_base) if activated_base > 0 else 0.0
 
-        # Find applicable scheme (match by origin, fallback to default)
-        scheme = default_scheme
-        tiers = default_tiers
-        for sch in scheme_map.values():
-            if sch.get("origin") and any(it["origin"] == sch["origin"] for it in group["items"] if it["origin"]):
-                scheme = sch
-                tiers = scheme_tiers.get(sch["id"], default_tiers)
-                break
+        if resolved_scheme:
+            tiers = tiers_list
+            min_aff = min_volume
+        else:
+            scheme = default_scheme
+            tiers = default_tiers
+            for sch in scheme_map.values():
+                if sch.get("origin") and any(it["origin"] == sch["origin"] for it in group["items"] if it["origin"]):
+                    scheme = sch
+                    tiers = scheme_tiers.get(sch["id"], default_tiers)
+                    break
+            min_aff = scheme["min_affiliations"]
 
-        min_aff = scheme["min_affiliations"]
         min_met = activated_base >= min_aff
 
-        # Find tier
         tier_reached = None
         tier_amount = 0.0
         tier_threshold = 0.0
@@ -381,10 +462,14 @@ def get_canonical_operation_snapshot(
                 tier_amount = t["payment_per_converted_driver"]
                 tier_threshold = t["min_conversion_rate"]
 
-        # Set per-driver payment
+        pay_label = "calidad" if pays_on_rule == "QUALITY_HIT" else "activados"
+        pay_count = quality_5v7d if pays_on_rule == "QUALITY_HIT" else activated_base
+
         for it in group["items"]:
-            it["counts_as_activated_base"] = it["activated_flag"]
-            it["counts_as_quality_5v7d"] = it["converted_5v7d"]
+            driver_meets_vol = _driver_meets_rule(tripmap_lookup.get(it["driver_id"], {}), vol_min, vol_days)
+            driver_meets_qual = _driver_meets_rule(tripmap_lookup.get(it["driver_id"], {}), qual_min, qual_days)
+            it["counts_as_activated_base"] = driver_meets_vol
+            it["counts_as_quality_5v7d"] = driver_meets_qual
             it["scout_activated_base"] = activated_base
             it["scout_quality_5v7d"] = quality_5v7d
             it["scout_conversion_rate_5v7d"] = round(conversion_rate, 4)
@@ -395,11 +480,13 @@ def get_canonical_operation_snapshot(
                 it["counts_for_payment"] = False
                 continue
 
-            if not it["activated_flag"]:
+            driver_payable = driver_meets_qual if pays_on_rule == "QUALITY_HIT" else driver_meets_vol
+
+            if not driver_payable:
                 it["payment_status"] = "not_payable"
                 it["reason"] = "no_activation"
                 it["payment_trace_status"] = "no_activation"
-                it["payment_basis_label"] = "no_trips_7d"
+                it["payment_basis_label"] = "below_threshold"
                 it["counts_for_payment"] = False
                 continue
 
@@ -407,9 +494,9 @@ def get_canonical_operation_snapshot(
                 it["payment_status"] = "not_payable"
                 it["reason"] = "min_activated_not_reached"
                 it["payment_trace_status"] = "blocked_min_activated"
-                it["payment_trace_warning"] = f"Minimo {min_aff} activados requerido, scout tiene {activated_base}"
+                it["payment_trace_warning"] = f"Minimo {min_aff} volumen requerido, scout tiene {activated_base}"
                 it["payment_basis_label"] = "scout_below_min"
-                it["payment_formula_label"] = f"scout_activated={activated_base} < min={min_aff}"
+                it["payment_formula_label"] = f"scout_volume={activated_base} < min={min_aff}"
                 it["counts_for_payment"] = False
                 continue
 
@@ -423,7 +510,6 @@ def get_canonical_operation_snapshot(
                 it["counts_for_payment"] = False
                 continue
 
-            # PAYABLE: scout meets min + tier, driver is activated
             it["payment_status"] = "payable"
             it["reason"] = "ok"
             it["payment_origin"] = "cutoff"
@@ -431,8 +517,8 @@ def get_canonical_operation_snapshot(
             it["payment_rule_label"] = f"Scout alcanza tier {tier_threshold:.0%} -> S/{tier_amount:.0f}"
             it["payment_evidence_label"] = "scout_tier_reached"
             it["payment_trace_status"] = "payable_scout_tier"
-            it["payment_basis_label"] = "activated_base"
-            it["payment_formula_label"] = f"tier={tier_amount} x activated={activated_base} = S/{activated_base * tier_amount:.0f}"
+            it["payment_basis_label"] = pay_label
+            it["payment_formula_label"] = f"tier={tier_amount} x {pay_label}={pay_count} = S/{pay_count * tier_amount:.0f}"
             it["counts_for_payment"] = True
 
     t4a = _time.perf_counter()
@@ -636,7 +722,8 @@ def _batch_trip_counts(db: Session, driver_ids: List[str]) -> Dict[str, Dict[str
     sql = f"""
         SELECT s.driver_id,
             COALESCE(SUM(t.trips_0_7), 0)::int AS trips_0_7_count,
-            COALESCE(SUM(t.trips_8_14), 0)::int AS trips_8_14_count
+            COALESCE(SUM(t.trips_8_14), 0)::int AS trips_8_14_count,
+            COALESCE(SUM(t.trips_0_30), 0)::int AS trips_0_30_count
         FROM {SOURCE_TABLE} s
         LEFT JOIN LATERAL (
             SELECT
@@ -649,7 +736,12 @@ def _batch_trip_counts(db: Session, driver_ids: List[str]) -> Dict[str, Dict[str
                     WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
                       AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
                       AND condicion = 'Completado'
-                ) AS trips_8_14
+                ) AS trips_8_14,
+                COUNT(*) FILTER (
+                    WHERE fecha_inicio_viaje >= s.hire_date::date
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
+                      AND condicion = 'Completado'
+                ) AS trips_0_30
             FROM trips_2026 WHERE conductor_id = s.driver_id
             UNION ALL
             SELECT
@@ -662,15 +754,20 @@ def _batch_trip_counts(db: Session, driver_ids: List[str]) -> Dict[str, Dict[str
                     WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
                       AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
                       AND condicion = 'Completado'
-                ) AS trips_8_14
+                ) AS trips_8_14,
+                COUNT(*) FILTER (
+                    WHERE fecha_inicio_viaje >= s.hire_date::date
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
+                      AND condicion = 'Completado'
+                ) AS trips_0_30
             FROM trips_2025 WHERE conductor_id = s.driver_id
-              AND s.hire_date::date + INTERVAL '14 days' < '2026-01-01'::date
+              AND s.hire_date::date + INTERVAL '30 days' < '2026-01-01'::date
         ) t ON true
         WHERE s.driver_id IN ({placeholders}) AND s.hire_date IS NOT NULL AND s.hire_date != ''
         GROUP BY s.driver_id
     """
     rows = db.execute(text(sql), params).fetchall()
-    return {r[0]: {"trips_0_7": r[1] or 0, "trips_8_14": r[2] or 0} for r in rows}
+    return {r[0]: {"trips_0_7": r[1] or 0, "trips_8_14": r[2] or 0, "trips_0_30": r[3] or 0} for r in rows}
 
 
 def _batch_paid_history(db: Session, driver_ids: List[str]) -> Dict[str, List[Dict[str, Any]]]:

@@ -516,6 +516,7 @@ class CanonicalDriverItem(BaseModel):
     attribution_status: str = "unassigned"
     trips_7d: int = 0
     trips_14d: int = 0
+    trips_0_30: Optional[int] = None
     activated_flag: bool = False
     converted_5v7d: bool = False
     converted_5v14d: bool = False
@@ -761,3 +762,74 @@ class CreateManualOverrideRequest(BaseModel):
     currency: str = "PEN"
     notes: Optional[str] = None
     created_by: Optional[str] = None
+
+
+# ── Reconciliation ──
+
+class ReconciliationCompareResponse(BaseModel):
+    total_rows: int = 0
+    matched_rows: int = 0
+    unmatched_rows: int = 0
+    amount_mismatch: int = 0
+    already_paid: int = 0
+    missing_in_system: int = 0
+    missing_in_upload: int = 0
+    details: List[Any] = []
+    suggested_actions: List[str] = []
+
+
+# ── Unified Load ──
+
+class UnifiedLoadPreviewLine(BaseModel):
+    source_row: int = 0
+    licencia: str = ""
+    scout: str = ""
+    supervisor: str = ""
+    pagado: str = ""
+    monto_pagado: float = 0.0
+    fecha_pago: str = ""
+    status: str = "ok"
+    errors: List[str] = []
+    warnings: List[str] = []
+    deduced_actions: List[str] = []
+    driver_id_resolved: Optional[str] = None
+    scout_id_resolved: Optional[int] = None
+
+
+class UnifiedLoadPreviewResponse(BaseModel):
+    total_rows: int = 0
+    valid_rows: int = 0
+    error_rows: int = 0
+    duplicate_rows: int = 0
+    drivers_found: int = 0
+    drivers_not_found: int = 0
+    scouts_to_create: int = 0
+    supervisors_to_create: int = 0
+    assignments_to_create: int = 0
+    assignments_to_change: int = 0
+    payments_to_create: int = 0
+    already_paid: int = 0
+    amount_mismatch: int = 0
+    warnings: List[str] = []
+    lines: List[UnifiedLoadPreviewLine] = []
+    apply_plan: List[Any] = []
+    parse_metadata: Any = {}
+
+
+class UnifiedLoadApplyDetail(BaseModel):
+    source_row: int = 0
+    status: str = ""
+    reason: Optional[str] = None
+    driver_id: Optional[str] = None
+    scout_id: Optional[int] = None
+    scout_name: Optional[str] = None
+    payment_created: bool = False
+    assignment_created: bool = False
+    what_happened: Optional[List[str]] = None
+
+
+class UnifiedLoadApplyResponse(BaseModel):
+    applied: int = 0
+    skipped: int = 0
+    errors: int = 0
+    details: List[UnifiedLoadApplyDetail] = []

@@ -151,7 +151,7 @@ export default function AtribucionView() {
 
       {/* Tabs */}
       <div className="flex gap-1 border-b">
-        {(['drivers', 'unassigned', 'assignments', 'upload'] as const).map((t) => (
+        {(['drivers', 'unassigned', 'assignments'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -162,7 +162,6 @@ export default function AtribucionView() {
             {t === 'drivers' && `Drivers Fuente (${driversTotal})`}
             {t === 'unassigned' && `Sin Scout (${unassignedTotal})`}
             {t === 'assignments' && `Asignaciones (${assignments.length})`}
-            {t === 'upload' && 'Carga CSV/XLSX'}
           </button>
         ))}
       </div>
@@ -313,39 +312,6 @@ export default function AtribucionView() {
           </table>
           {assignments.length === 0 && (
             <div className="p-8 text-center text-gray-400">No hay asignaciones</div>
-          )}
-        </div>
-      )}
-
-      {/* Tab: Upload */}
-      {tab === 'upload' && (
-        <div className="space-y-4">
-          <div className="bg-white border rounded-lg p-6">
-            <h3 className="font-semibold mb-2">Cargar archivo CSV o XLSX</h3>
-            <p className="text-sm text-gray-500 mb-4">
-              Columnas esperadas: driver_id, scout_id o scout_name, origin (opcional), notes (opcional)
-            </p>
-            <input type="file" accept=".csv,.xlsx" onChange={handleUpload} className="text-sm" />
-          </div>
-
-          {uploadResult && (
-            <div className="bg-white border rounded-lg p-6">
-              <h3 className="font-semibold mb-3">Resultado de la carga</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
-                <div className="bg-gray-50 rounded p-3"><div className="text-gray-500">Total filas</div><div className="text-xl font-bold">{uploadResult.total_rows}</div></div>
-                <div className="bg-green-50 rounded p-3"><div className="text-green-700">Creadas</div><div className="text-xl font-bold text-green-700">{uploadResult.created}</div></div>
-                <div className="bg-yellow-50 rounded p-3"><div className="text-yellow-700">Duplicados</div><div className="text-xl font-bold text-yellow-700">{uploadResult.skipped_duplicates}</div></div>
-                <div className="bg-red-50 rounded p-3"><div className="text-red-700">Errores</div><div className="text-xl font-bold text-red-700">{uploadResult.errors.length}</div></div>
-              </div>
-              {uploadResult.errors.length > 0 && (
-                <div className="bg-red-50 rounded p-3 max-h-40 overflow-y-auto">
-                  <h4 className="text-sm font-medium text-red-800 mb-1">Errores:</h4>
-                  {uploadResult.errors.map((e, i) => (
-                    <div key={i} className="text-xs text-red-600">{e}</div>
-                  ))}
-                </div>
-              )}
-            </div>
           )}
         </div>
       )}

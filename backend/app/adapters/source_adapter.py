@@ -270,22 +270,17 @@ def compute_trip_counts_batch(
     db: Session,
     driver_ids: List[str],
 ) -> Dict[str, Dict[str, int]]:
-    """Compute trips_0_7_count and trips_8_14_count for a batch of drivers."""
+    """Compute trips_0_7_count, trips_8_14_count and trips_0_30_count for a batch of drivers."""
     if not driver_ids:
         return {}
     placeholders = ", ".join(f":did{i}" for i in range(len(driver_ids)))
     params = {f"did{i}": did for i, did in enumerate(driver_ids)}
-    # Determine which trip tables each driver needs:
-    # - If hire_date + 14d reaches into 2025, query trips_2025
-    # - Always query trips_2026 (has conductor_fecha index, fast)
-    need_2025 = ", ".join(
-        f":did{i}" for i in range(len(driver_ids))
-    ) + " AND s.hire_date::date + INTERVAL '14 days' < '2026-01-01'::date"
 
     sql = f"""
         SELECT s.driver_id,
             COALESCE(SUM(t.trips_0_7), 0)::int AS trips_0_7_count,
-            COALESCE(SUM(t.trips_8_14), 0)::int AS trips_8_14_count
+            COALESCE(SUM(t.trips_8_14), 0)::int AS trips_8_14_count,
+            COALESCE(SUM(t.trips_0_30), 0)::int AS trips_0_30_count
         FROM module_ct_cabinet_drivers s
         LEFT JOIN LATERAL (
             SELECT
@@ -298,7 +293,12 @@ def compute_trip_counts_batch(
                     WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
                       AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
                       AND condicion = 'Completado'
-                ) AS trips_8_14
+                ) AS trips_8_14,
+                COUNT(*) FILTER (
+                    WHERE fecha_inicio_viaje >= s.hire_date::date
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
+                      AND condicion = 'Completado'
+                ) AS trips_0_30
             FROM trips_2026
             WHERE conductor_id = s.driver_id
             UNION ALL
@@ -312,14 +312,19 @@ def compute_trip_counts_batch(
                     WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
                       AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
                       AND condicion = 'Completado'
-                ) AS trips_8_14
+                ) AS trips_8_14,
+                COUNT(*) FILTER (
+                    WHERE fecha_inicio_viaje >= s.hire_date::date
+                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
+                      AND condicion = 'Completado'
+                ) AS trips_0_30
             FROM trips_2025
             WHERE conductor_id = s.driver_id
-              AND s.hire_date::date + INTERVAL '14 days' < '2026-01-01'::date
+              AND s.hire_date::date + INTERVAL '30 days' < '2026-01-01'::date
         ) t ON true
         WHERE s.driver_id IN ({placeholders})
           AND s.hire_date IS NOT NULL AND s.hire_date != ''
         GROUP BY s.driver_id
     """
     rows = db.execute(text(sql), params).fetchall()
-    return {r[0]: {"trips_0_7_count": r[1] or 0, "trips_8_14_count": r[2] or 0} for r in rows}
+    return {r[0]: {"trips_0_7_count": r[1] or 0, "trips_8_14_count": r[2] or 0, "trips_0_30_count": r[3] or 0} for r in rows}

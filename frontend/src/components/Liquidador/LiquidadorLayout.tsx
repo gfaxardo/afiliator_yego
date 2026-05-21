@@ -1,31 +1,45 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 
 const MAIN_TABS = [
   { to: '/scout-liq/operation', label: 'Operacion' },
-  { to: '/scout-liq/dashboard', label: 'Dashboard' },
   { to: '/scout-liq/liquidador', label: 'Liquidador' },
+  { to: '/scout-liq/centro-carga', label: 'Centro de Carga' },
   { to: '/scout-liq/configuracion', label: 'Configuracion' },
+  { to: '/scout-liq/dashboard', label: 'Dashboard' },
 ]
 
-const ADVANCED_TABS = [
+const LEGACY_UPLOAD_TABS = [
   { to: '/scout-liq/historical', label: 'Historico' },
   { to: '/scout-liq/workbook', label: 'Import Integral' },
   { to: '/scout-liq/attributions', label: 'Atribuciones' },
   { to: '/scout-liq/atribucion', label: 'Atribucion' },
   { to: '/scout-liq/manual-payments', label: 'Pagos Manuales' },
+  { to: '/scout-liq/bulk-scouts', label: 'Carga Masiva' },
+  { to: '/scout-liq/schemes', label: 'Esquemas' },
+]
+
+const ALWAYS_ADVANCED_TABS = [
   { to: '/scout-liq/supervisor-bonus', label: 'Sup & Bonos' },
   { to: '/scout-liq/paid-history', label: 'Historial Pagos' },
   { to: '/scout-liq/scouts', label: 'Scouts' },
-  { to: '/scout-liq/bulk-scouts', label: 'Carga Masiva' },
-  { to: '/scout-liq/schemes', label: 'Esquemas' },
   { to: '/scout-liq/config', label: 'Config' },
   { to: '/scout-liq', label: 'Health' },
 ]
 
+const isLegacyEnabled = () =>
+  import.meta.env.VITE_ENABLE_LEGACY_IMPORTS === 'true'
+
 export default function LiquidadorLayout() {
   const [showAdvanced, setShowAdvanced] = useState(false)
   const location = useLocation()
+
+  const ADVANCED_TABS = useMemo(() => {
+    if (isLegacyEnabled()) {
+      return [...LEGACY_UPLOAD_TABS, ...ALWAYS_ADVANCED_TABS]
+    }
+    return ALWAYS_ADVANCED_TABS
+  }, [])
 
   return (
     <div className="min-h-screen bg-gray-50">
