@@ -895,6 +895,7 @@ def export_cutoff_xlsx(db: Session, cutoff_run_id: int) -> bytes:
 def get_payment_history_report(
     db: Session,
     scout_id: Optional[int] = None,
+    driver_id: Optional[str] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     limit: int = 100,
@@ -903,6 +904,8 @@ def get_payment_history_report(
     q = db.query(PaidHistory)
     if scout_id:
         q = q.filter(PaidHistory.scout_id == scout_id)
+    if driver_id:
+        q = q.filter(PaidHistory.driver_id == driver_id)
     if date_from:
         q = q.filter(PaidHistory.paid_at >= date_from)
     if date_to:
@@ -932,4 +935,305 @@ def get_payment_history_report(
             }
             for r in rows
         ],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# K. SIMULACION DE PAGO (sin persistir)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def simulate_payment(
+    db: Session,
+    hire_date_from: date,
+    hire_date_to: date,
+    scheme_id: int,
+    origin: Optional[str] = None,
+    scout_type: Optional[str] = None,
+    override_tiers: Optional[List[Dict[str, Any]]] = None,
+    override_min_affiliations: Optional[int] = None,
+    override_quality_rule: Optional[str] = None,
+    override_pays_on_rule: Optional[str] = None,
+    override_payout_formula_type: Optional[str] = None,
+    override_activation_rule: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Simula un pago sin persistir nada en cutoff_runs, summaries, lines ni paid_history.
+    Permite sobreescribir tiers, minimos, reglas para comparar escenarios.
+
+    Retorna el mismo formato que un cutoff real pero con status="simulated"
+    y SIN cutoff_run_id real (usa -1).
+    """
+    scheme = db.query(ConversionScheme).filter(ConversionScheme.id == scheme_id).first()
+    if not scheme:
+        raise ValueError(f"Scheme {scheme_id} no encontrado")
+
+    tiers = db.query(ConversionTier).filter(
+        ConversionTier.scheme_id == scheme_id,
+        ConversionTier.active == True,
+    ).order_by(ConversionTier.min_conversion_rate).all()
+
+    if not tiers and not override_tiers:
+        raise ValueError(f"Scheme {scheme_id} no tiene tramos activos")
+
+    effective_tiers = override_tiers or [
+        {
+            "min_conversion_rate": float(t.min_conversion_rate),
+            "payout_amount": float(t.payment_per_converted_driver),
+            "payment_per_converted_driver": float(t.payment_per_converted_driver),
+            "currency": t.currency,
+            "sort_order": 0,
+        }
+        for t in tiers
+    ]
+
+    config = {
+        "scheme_id": scheme.id,
+        "scheme_name": scheme.scheme_name,
+        "origin": scheme.origin,
+        "scout_type": scheme.scout_type,
+        "min_affiliations": override_min_affiliations or scheme.min_affiliations,
+        "min_activated": override_min_affiliations or scheme.min_affiliations,
+        "tiers": effective_tiers,
+        "conversion_metric": "5plus_0_7",
+        "activation_rule": override_activation_rule or "1V7D",
+        "quality_rule": override_quality_rule or "5V7D",
+        "volume_rule": override_activation_rule or "1V7D",
+        "pays_on_rule": override_pays_on_rule or "ACTIVATED_BASE",
+        "payout_formula_type": override_payout_formula_type or "ACTIVATED_X_TIER",
+        "formula_type": override_payout_formula_type or "ACTIVATED_X_TIER",
+        "currency": "PEN",
+        "frozen_at": datetime.now().isoformat(),
+        "overrides_applied": {
+            "tiers": override_tiers is not None,
+            "min_affiliations": override_min_affiliations is not None,
+            "quality_rule": override_quality_rule is not None,
+            "pays_on_rule": override_pays_on_rule is not None,
+            "payout_formula_type": override_payout_formula_type is not None,
+            "activation_rule": override_activation_rule is not None,
+        },
+    }
+
+    # Reuse cutoff_engine calculation logic with a detached session-like approach
+    from app.services.cutoff_engine import _parse_rule, _get_trip_count_for_window, _compute_lifecycle, check_already_paid
+    from app.adapters.source_adapter import compute_trip_counts_batch
+
+    # Parse rules
+    volume_rule_str = config.get("volume_rule", config.get("activation_rule", "1V7D"))
+    quality_rule_str = config.get("quality_rule", "5V7D")
+    pays_on_rule = config.get("pays_on_rule", "") or "ACTIVATED_BASE"
+    payout_formula_type = config.get("payout_formula_type", config.get("formula_type", "ACTIVATED_X_TIER"))
+
+    vol_min, vol_days = _parse_rule(volume_rule_str)
+    qual_min, qual_days = _parse_rule(quality_rule_str)
+    effective_tiers_sorted = sorted(effective_tiers, key=lambda t: t["min_conversion_rate"])
+    min_activated = config.get("min_activated", 0)
+
+    # Fetch assignments
+    assignments = db.query(DriverAssignment, Scout).join(
+        Scout, DriverAssignment.scout_id == Scout.id
+    ).filter(
+        DriverAssignment.status == "active",
+        DriverAssignment.hire_date.is_(None) | (
+            (DriverAssignment.hire_date >= hire_date_from)
+            & (DriverAssignment.hire_date <= hire_date_to)
+        ),
+    )
+    if origin:
+        assignments = assignments.filter(DriverAssignment.origin == origin)
+    if scout_type:
+        assignments = assignments.filter(Scout.scout_type == scout_type)
+
+    assignments = assignments.order_by(DriverAssignment.scout_id, DriverAssignment.driver_id).all()
+
+    # Collect driver IDs
+    all_driver_ids = []
+    scout_groups = {}
+    for a, scout in assignments:
+        all_driver_ids.append(a.driver_id)
+        sg = scout_groups.setdefault(scout.id, {
+            "scout": scout,
+            "assignment_ids": [],
+            "driver_ids": [],
+            "hire_dates": {},
+            "origins": {},
+        })
+        sg["assignment_ids"].append(a.id)
+        sg["driver_ids"].append(a.driver_id)
+        sg["hire_dates"][a.driver_id] = a.hire_date
+        sg["origins"][a.driver_id] = a.origin
+
+    unique_ids = sorted(set(all_driver_ids))
+
+    # Trip counts
+    trip_counts = {}
+    if unique_ids:
+        trip_counts = compute_trip_counts_batch(db, unique_ids)
+
+    # Execute simulation per scout
+    scout_results = []
+    all_lines = []
+    grand_total_payable = Decimal("0")
+    grand_total_drivers = 0
+    grand_payable_drivers = 0
+    grand_blocked_dupes = 0
+
+    for scout_id, sg in scout_groups.items():
+        scout = sg["scout"]
+        scout_lines = []
+
+        activated_count = 0
+        quality_count = 0
+        not_converted = 0
+
+        for did in sg["driver_ids"]:
+            tc = trip_counts.get(did, {})
+            trips_0_7 = tc.get("trips_0_7_count", 0) or 0
+            trips_8_14 = tc.get("trips_8_14_count", 0) or 0
+            trips_0_14 = trips_0_7 + trips_8_14
+            total_orders = tc.get("total_orders", 0) or 0
+
+            life = _compute_lifecycle(trips_0_7, trips_8_14, trips_0_14)
+
+            meets_volume = _get_trip_count_for_window(tc, did, vol_days) >= vol_min
+            meets_quality = _get_trip_count_for_window(tc, did, qual_days) >= qual_min
+
+            activated = meets_volume
+            is_5v7d = trips_0_7 >= 5
+            is_5v14d = trips_0_14 >= 5
+
+            if activated:
+                activated_count += 1
+            if meets_quality:
+                quality_count += 1
+            if activated and not is_5v7d:
+                not_converted += 1
+
+            already = check_already_paid(db, did)
+            eligible = meets_quality
+            blocked_reason = None
+            if already:
+                blocked_reason = "ya pagado en corte anterior"
+                eligible = False
+
+            line = {
+                "driver_id": did,
+                "hire_date": str(sg["hire_dates"].get(did)) if sg["hire_dates"].get(did) else None,
+                "origin": sg["origins"].get(did),
+                "trips_0_7_count": trips_0_7,
+                "trips_8_14_count": trips_8_14,
+                "trips_0_14_count": trips_0_14,
+                "total_orders": total_orders,
+                "activated_flag": activated,
+                "is_converted_5trips_7d": is_5v7d,
+                "is_converted_5trips_14d": is_5v14d,
+                "driver_lifecycle_status": life,
+                "line_status": "payable" if eligible else "blocked",
+                "payment_status": "payable" if eligible else "blocked",
+                "blocked_reason": blocked_reason,
+                "eligible": eligible,
+                "already_paid": already,
+                "payout_eligible_flag": eligible,
+            }
+            if eligible:
+                quality_fraction = quality_count
+                payment_base = quality_fraction if "QUALITY" in pays_on_rule.upper() else activated_count
+                if "ACTIVATED" in pays_on_rule.upper() or not pays_on_rule:
+                    payment_base = activated_count
+
+                tier = None
+                if activated_count >= min_activated and quality_count > 0:
+                    conv_rate = Decimal(str(quality_count)) / Decimal(str(activated_count)) if activated_count > 0 else Decimal("0")
+                    for t in effective_tiers_sorted:
+                        if float(conv_rate) >= t["min_conversion_rate"]:
+                            tier = t
+                if tier:
+                    if "ACTIVATED" in pays_on_rule.upper() or not pays_on_rule:
+                        amount = Decimal(str(tier["payout_amount"]))
+                else:
+                    tier = None
+
+                if tier:
+                    amount_final = amount if 'amount' in dir() else Decimal(str(tier["payout_amount"]))
+                    line["calculated_amount"] = float(amount_final)
+                else:
+                    line["calculated_amount"] = 0
+                    line["payout_eligible_flag"] = False
+                    line["line_status"] = "blocked"
+                    line["payment_status"] = "blocked"
+                    line["blocked_reason"] = line["blocked_reason"] or "scout no alcanza tramo"
+                scout_lines.append(line)
+                grand_total_drivers += 1
+            else:
+                scout_lines.append(line)
+                grand_total_drivers += 1
+
+        # Scout level summary
+        if activated_count > 0:
+            conv_rate_val = Decimal(str(quality_count)) / Decimal(str(activated_count))
+        else:
+            conv_rate_val = Decimal("0")
+
+        tier_reached_val = None
+        payout_per_activated = Decimal("0")
+        if activated_count >= min_activated and quality_count > 0:
+            for t in effective_tiers_sorted:
+                if float(conv_rate_val) >= t["min_conversion_rate"]:
+                    tier_reached_val = Decimal(str(t["min_conversion_rate"]))
+                    payout_per_activated = Decimal(str(t["payout_amount"]))
+
+        scout_payable = sum(1 for l in scout_lines if l.get("payout_eligible_flag"))
+        scout_amount = sum(Decimal(str(l.get("calculated_amount", 0) or 0)) for l in scout_lines if l.get("payout_eligible_flag"))
+
+        scout_results.append({
+            "scout_id": scout_id,
+            "scout_name": scout.scout_name,
+            "origin": scout.origin,
+            "total_affiliations": len(sg["driver_ids"]),
+            "total_activated": activated_count,
+            "drivers_1plus_0_7": activated_count,
+            "drivers_5plus_0_7": quality_count,
+            "drivers_1plus_8_14": 0,
+            "drivers_5plus_0_14": sum(1 for l in scout_lines if l.get("is_converted_5trips_14d")),
+            "total_converted_5v14d": sum(1 for l in scout_lines if l.get("is_converted_5trips_14d")),
+            "not_converted": not_converted,
+            "conversion_rate": float(conv_rate_val),
+            "conversion_rate_5v7d": float(conv_rate_val),
+            "tier_reached": float(tier_reached_val) if tier_reached_val else None,
+            "payment_per_converted_driver": float(payout_per_activated),
+            "payout_per_activated": float(payout_per_activated),
+            "amount_calculated": float(scout_amount),
+            "amount_approved": float(scout_amount),
+            "total_payable": float(scout_amount),
+            "status": "simulated",
+            "blocked_reason": "" if scout_payable > 0 else ("Minimo no alcanzado" if activated_count < min_activated else "Sin tramo alcanzado"),
+            "min_activated_threshold": min_activated,
+            "meets_minimum": activated_count >= min_activated,
+            "payable_drivers": scout_payable,
+        })
+
+        all_lines.extend(scout_lines)
+        grand_total_payable += scout_amount
+        grand_payable_drivers += scout_payable
+        grand_blocked_dupes += sum(1 for l in scout_lines if l.get("already_paid"))
+
+    return {
+        "status": "simulated",
+        "cutoff_run_id": -1,
+        "config_snapshot": config,
+        "scout_summaries": scout_results,
+        "totals": {
+            "scouts_evaluated": len(scout_results),
+            "scouts_payable": sum(1 for s in scout_results if s["payable_drivers"] > 0),
+            "scouts_blocked": sum(1 for s in scout_results if s["payable_drivers"] == 0),
+            "drivers_total": grand_total_drivers,
+            "drivers_payable": grand_payable_drivers,
+            "drivers_blocked": grand_total_drivers - grand_payable_drivers,
+            "drivers_already_paid": grand_blocked_dupes,
+            "drivers_paid_in_cutoff": 0,
+            "amount_calculated_total": float(grand_total_payable),
+            "amount_approved_total": float(grand_total_payable),
+            "amount_paid_total": 0,
+        },
+        "paid_history": [],
+        "driver_lines": all_lines,
     }

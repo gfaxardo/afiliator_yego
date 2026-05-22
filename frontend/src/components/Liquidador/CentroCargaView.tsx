@@ -73,10 +73,138 @@ const RECON_STATUS_COLORS: Record<string, string> = {
   scout_mismatch: 'bg-yellow-100 text-yellow-700',
 }
 
+function escapeCsvField(val: any): string {
+  if (val === null || val === undefined) return ''
+  let s = String(val)
+  // CSV injection prevention: prepend apostrophe if starts with = + - @
+  if (/^[=+\-@]/.test(s)) s = "'" + s
+  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+    s = '"' + s.replace(/"/g, '""') + '"'
+  }
+  return s
+}
+
+function makeCsvLine(fields: any[]): string {
+  return fields.map(escapeCsvField).join(',')
+}
+
+function buildTimestamp(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+function buildPreviewLookup(previewLines: any[]): Map<number, any> {
+  const m = new Map<number, any>()
+  for (const p of previewLines) {
+    const sr = p.source_row ?? p.row
+    if (sr != null) m.set(Number(sr), p)
+  }
+  return m
+}
+
+function generateApplyCsv(
+  applyLines: UnifiedApplyLine[],
+  previewLookup: Map<number, any>,
+  summary: UnifiedApplySummary | null,
+  fileName: string,
+  appliedAt: string,
+  filter: (line: UnifiedApplyLine) => boolean = () => true,
+): string {
+  const header = [
+    'source_row', 'driver_id', 'license_raw', 'driver_name',
+    'scout_id', 'scout_name', 'supervisor', 'pagado', 'monto_pagado', 'fecha_pago',
+    'origin', 'action', 'status', 'saved', 'message',
+    'what_happened', 'error_code',
+    'already_paid', 'payment_created', 'assignment_created',
+    'no_change', 'conflict', 'not_found',
+    'existing_scout_id', 'existing_scout_name',
+    'source_file', 'import_batch_id',
+  ]
+
+  const BOM = '\uFEFF'
+  const lines = [BOM + makeCsvLine(header)]
+
+  for (const l of applyLines) {
+    if (!filter(l)) continue
+
+    const sr = l.source_row ?? l.row
+    const prev = (sr != null) ? previewLookup.get(Number(sr)) : undefined
+
+    const action = l.action ?? ''
+    const isNoChange = action === 'no_change' || action === 'duplicate_existing'
+    const isConflict = action === 'conflict_existing_active_scout'
+    const isNotFound = action === 'driver_not_found' || action === 'scout_not_found'
+    const isAlreadyPaid = action === 'already_paid'
+    const isPayment = action === 'created_payment_history'
+    const isAssignment = action === 'created_assignment' || action === 'reactivated_assignment'
+
+    lines.push(makeCsvLine([
+      sr ?? '',
+      l.driver_id ?? prev?.driver_id_resolved ?? '',
+      l.licencia ?? prev?.licencia ?? '',
+      '',
+      l.scout_id ?? prev?.scout_id_resolved ?? '',
+      l.scout_name ?? l.scout ?? prev?.scout ?? '',
+      prev?.supervisor ?? '',
+      prev?.pagado ?? '',
+      prev?.monto_pagado ?? '',
+      prev?.fecha_pago ?? '',
+      '',
+      action,
+      l.status ?? '',
+      l.saved ? 'true' : 'false',
+      l.message ?? '',
+      (l.what_happened ?? []).join(' | '),
+      l.error_code ?? '',
+      isAlreadyPaid ? 'true' : 'false',
+      isPayment ? 'true' : 'false',
+      isAssignment ? 'true' : 'false',
+      isNoChange ? 'true' : 'false',
+      isConflict ? 'true' : 'false',
+      isNotFound ? 'true' : 'false',
+      '',
+      '',
+      fileName,
+      '',
+    ]))
+  }
+
+  // Summary footer
+  if (summary) {
+    lines.push('')
+    lines.push(makeCsvLine(['=== RESUMEN ===', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['total_rows', summary.total_rows ?? applyLines.length, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['applied', summary.applied, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['no_change', summary.no_change, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['conflicts', summary.conflicts, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['already_paid', summary.already_paid, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['not_found', summary.not_found, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['errors', summary.errors, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['commit_ok', String(summary.commit_ok), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['file_name', fileName, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+    lines.push(makeCsvLine(['applied_at', appliedAt, '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']))
+  }
+
+  return lines.join('\n')
+}
+
+function triggerCsvDownload(csvContent: string, filename: string) {
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export default function CentroCargaView() {
   const [preview, setPreview] = useState<UnifiedPreviewResponse | null>(null)
   const [applySummary, setApplySummary] = useState<UnifiedApplySummary | null>(null)
   const [applyLines, setApplyLines] = useState<UnifiedApplyLine[]>([])
+  const [appliedAt, setAppliedAt] = useState<string>('')
+  const [sourceFileName, setSourceFileName] = useState<string>('')
   const [applyActionFilter, setApplyActionFilter] = useState<string>('all')
   const pendingFileRef = useRef<File | null>(null)
 
@@ -107,6 +235,7 @@ export default function CentroCargaView() {
     setLoading(true); setError(null); setPreview(null); setApplySummary(null); setApplyLines([])
     setStreamLines([]); setStreamProgress({ progress: 0, total: 0 })
     pendingFileRef.current = file
+    setSourceFileName(file.name)
 
     await previewUnifiedLoadStream(
       file,
@@ -132,6 +261,7 @@ export default function CentroCargaView() {
           payments_to_create: summary.payments_to_create,
           already_paid: summary.already_paid,
           amount_mismatch: summary.amount_mismatch || 0,
+          assignments_already_exist: 0,
           warnings: [],
           lines: [],
           apply_plan: summary.apply_plan || [],
@@ -171,6 +301,7 @@ export default function CentroCargaView() {
       },
       (summary) => {
         setApplySummary(summary)
+        setAppliedAt(new Date().toISOString())
         setLoading(false)
         if (summary.commit_ok === false) {
           setError('NO GUARDADO: Los cambios no se guardaron en la base de datos. ' + (summary.commit_error || ''))
@@ -240,6 +371,39 @@ export default function CentroCargaView() {
       setError('Error al exportar estado del sistema')
     }
   }, [reconFilters])
+
+  // ── Descarga de reportes post-apply ──
+  const previewLookup = useMemo(() => {
+    return buildPreviewLookup(preview?.lines ?? [])
+  }, [preview])
+
+  const downloadFullReport = useCallback(() => {
+    const ts = buildTimestamp()
+    const csv = generateApplyCsv(applyLines, previewLookup, applySummary, sourceFileName, appliedAt)
+    triggerCsvDownload(csv, `scout_liq_apply_report_${ts}.csv`)
+  }, [applyLines, previewLookup, applySummary, sourceFileName, appliedAt])
+
+  const downloadProblemsCsv = useCallback(() => {
+    const ts = buildTimestamp()
+    const csv = generateApplyCsv(applyLines, previewLookup, applySummary, sourceFileName, appliedAt, (l) => {
+      return l.status !== 'ok'
+        || l.action === 'driver_not_found'
+        || l.action === 'scout_not_found'
+        || l.action === 'conflict_existing_active_scout'
+        || l.action === 'error'
+        || l.action === 'already_paid'
+        || l.action === 'duplicate_existing'
+    })
+    triggerCsvDownload(csv, `scout_liq_apply_problems_${ts}.csv`)
+  }, [applyLines, previewLookup, applySummary, sourceFileName, appliedAt])
+
+  const downloadConflictsCsv = useCallback(() => {
+    const ts = buildTimestamp()
+    const csv = generateApplyCsv(applyLines, previewLookup, applySummary, sourceFileName, appliedAt, (l) => {
+      return l.action === 'conflict_existing_active_scout' || l.status === 'manual_review'
+    })
+    triggerCsvDownload(csv, `scout_liq_apply_conflicts_${ts}.csv`)
+  }, [applyLines, previewLookup, applySummary, sourceFileName, appliedAt])
 
   // ── Contraste: Comparar archivo externo ──
   const handleCompare = useCallback(async (file: File) => {
@@ -483,6 +647,24 @@ export default function CentroCargaView() {
                     </div>
                   </details>
                 ))}
+              </div>
+            )}
+
+            {/* ── Botones de descarga post-apply ── */}
+            {applyLines.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-100">
+                <button onClick={downloadFullReport}
+                  className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+                  Descargar reporte final CSV
+                </button>
+                <button onClick={downloadProblemsCsv}
+                  className="px-3 py-1.5 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 transition-colors">
+                  Descargar solo problemas CSV
+                </button>
+                <button onClick={downloadConflictsCsv}
+                  className="px-3 py-1.5 text-xs bg-red-500 text-white rounded hover:bg-red-600 transition-colors">
+                  Descargar conflictos CSV
+                </button>
               </div>
             )}
           </div>

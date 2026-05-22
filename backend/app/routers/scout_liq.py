@@ -5,13 +5,14 @@ import hashlib
 import time
 import logging
 import traceback
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 from datetime import date, datetime
 
 _logger = logging.getLogger("scout_liq")
 
 from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, Request
 from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from decimal import Decimal
@@ -160,6 +161,7 @@ from app.services.scout_liq_payment_flow_service import (
     export_cutoff_csv_full,
     export_cutoff_xlsx,
     get_payment_history_report,
+    simulate_payment,
 )
 from app.schemas.scout_liq import (
     ScoutCreate,
@@ -995,6 +997,62 @@ def create_payment_draft_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SIMULACION DE PAGO (sin persistir) — definida ANTES de rutas con {cutoff_run_id}
+# ═══════════════════════════════════════════════════════════════════════════
+
+class SimulationTier(BaseModel):
+    min_conversion_rate: float
+    payout_amount: float
+
+
+class SimulationRequest(BaseModel):
+    hire_date_from: date
+    hire_date_to: date
+    scheme_id: int
+    origin: Optional[str] = None
+    scout_type: Optional[str] = None
+    override_tiers: Optional[List[SimulationTier]] = None
+    override_min_affiliations: Optional[int] = None
+    override_quality_rule: Optional[str] = None
+    override_pays_on_rule: Optional[str] = None
+    override_payout_formula_type: Optional[str] = None
+    override_activation_rule: Optional[str] = None
+
+
+@router.post("/payments/simulate")
+def simulate_payment_endpoint(body: SimulationRequest, db: Session = Depends(get_db)):
+    try:
+        override_tiers = None
+        if body.override_tiers:
+            override_tiers = [
+                {
+                    "min_conversion_rate": t.min_conversion_rate,
+                    "payout_amount": t.payout_amount,
+                    "payment_per_converted_driver": t.payout_amount,
+                    "currency": "PEN",
+                    "sort_order": 0,
+                }
+                for t in body.override_tiers
+            ]
+        return simulate_payment(
+            db,
+            hire_date_from=body.hire_date_from,
+            hire_date_to=body.hire_date_to,
+            scheme_id=body.scheme_id,
+            origin=body.origin,
+            scout_type=body.scout_type,
+            override_tiers=override_tiers,
+            override_min_affiliations=body.override_min_affiliations,
+            override_quality_rule=body.override_quality_rule,
+            override_pays_on_rule=body.override_pays_on_rule,
+            override_payout_formula_type=body.override_payout_formula_type,
+            override_activation_rule=body.override_activation_rule,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/payments/{cutoff_run_id}/recalculate")
 def recalculate_draft_endpoint(cutoff_run_id: int, db: Session = Depends(get_db)):
     try:
@@ -1121,13 +1179,14 @@ def cohort_payment_report_endpoint(cohort_key: str, db: Session = Depends(get_db
 @router.get("/reports/payment-history")
 def payment_history_report_endpoint(
     scout_id: Optional[int] = Query(None),
+    driver_id: Optional[str] = Query(None),
     date_from: Optional[date] = Query(None),
     date_to: Optional[date] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return get_payment_history_report(db, scout_id, date_from, date_to, limit, offset)
+    return get_payment_history_report(db, scout_id, driver_id, date_from, date_to, limit, offset)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

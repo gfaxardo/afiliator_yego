@@ -10,8 +10,11 @@ NO se usa action por fila.
 NO se obliga al usuario a indicar assign/reassign/paid.
 """
 
+import csv as _csv
 import io
 import re
+import uuid
+import threading
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any, Tuple
@@ -25,6 +28,10 @@ from app.models.scout_liq import (
     Scout, DriverAssignment, PaidHistory,
     HistoricalAttribution, ManualOverride,
 )
+
+_preview_store: Dict[str, dict] = {}
+_preview_store_lock = threading.Lock()
+_PREVIEW_TTL_SECONDS = 3600
 
 SOURCE_TABLE = settings.SOURCE_TABLE
 
@@ -1019,3 +1026,113 @@ def _build_blocking_paid_cache(db: Session) -> set:
         "WHERE blocks_future_payment = true AND status = 'paid'"
     )).fetchall()
     return {r[0] for r in rows if r[0]}
+
+
+def _store_preview(data: dict) -> str:
+    preview_id = uuid.uuid4().hex[:12]
+    with _preview_store_lock:
+        _preview_store[preview_id] = {
+            "data": data,
+            "created_at": datetime.now(),
+        }
+    return preview_id
+
+
+def _get_preview(preview_id: str) -> Optional[dict]:
+    with _preview_store_lock:
+        entry = _preview_store.get(preview_id)
+        if not entry:
+            return None
+        age = (datetime.now() - entry["created_at"]).total_seconds()
+        if age > _PREVIEW_TTL_SECONDS:
+            del _preview_store[preview_id]
+            return None
+        return entry["data"]
+
+
+def generate_preview_audit_csv(db: Session, rows: List[dict]) -> str:
+    result = unified_preview(db, rows)
+    preview_id = _store_preview(result)
+
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow([
+        "source_row", "licencia", "scout", "supervisor", "pagado",
+        "monto_pagado", "fecha_pago", "status", "deduced_actions",
+        "errors", "warnings", "driver_id_resolved", "scout_id_resolved",
+        "preview_id",
+    ])
+    for line in result.get("lines", []):
+        w.writerow([
+            line.get("source_row", ""),
+            line.get("licencia", ""),
+            line.get("scout", ""),
+            line.get("supervisor", ""),
+            line.get("pagado", ""),
+            line.get("monto_pagado", ""),
+            line.get("fecha_pago", ""),
+            line.get("status", ""),
+            " | ".join(line.get("deduced_actions", [])),
+            "; ".join(line.get("errors", [])),
+            "; ".join(line.get("warnings", [])),
+            line.get("driver_id_resolved", ""),
+            line.get("scout_id_resolved", ""),
+            preview_id,
+        ])
+
+    # Append summary rows
+    w.writerow([])
+    w.writerow(["=== RESUMEN ==="])
+    w.writerow(["total_rows", result.get("total_rows", 0)])
+    w.writerow(["valid_rows", result.get("valid_rows", 0)])
+    w.writerow(["error_rows", result.get("error_rows", 0)])
+    w.writerow(["duplicate_rows", result.get("duplicate_rows", 0)])
+    w.writerow(["drivers_found", result.get("drivers_found", 0)])
+    w.writerow(["drivers_not_found", result.get("drivers_not_found", 0)])
+    w.writerow(["scouts_to_create", result.get("scouts_to_create", 0)])
+    w.writerow(["assignments_to_create", result.get("assignments_to_create", 0)])
+    w.writerow(["assignments_to_change", result.get("assignments_to_change", 0)])
+    w.writerow(["payments_to_create", result.get("payments_to_create", 0)])
+    w.writerow(["already_paid", result.get("already_paid", 0)])
+    w.writerow(["preview_id", preview_id])
+
+    return buf.getvalue()
+
+
+def generate_apply_audit_csv(preview_lines: List[dict], apply_lines: List[dict]) -> str:
+    apply_by_row: Dict[int, dict] = {}
+    for al in apply_lines:
+        sr = al.get("source_row", 0)
+        apply_by_row[sr] = al
+
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow([
+        "source_row", "licencia", "scout", "supervisor", "pagado",
+        "monto_pagado", "fecha_pago", "preview_status", "preview_actions",
+        "apply_action", "apply_status", "apply_saved", "apply_message",
+        "what_happened", "driver_id_resolved",
+    ])
+
+    for pl in preview_lines:
+        sr = pl.get("source_row", "")
+        apply = apply_by_row.get(sr, {})
+        w.writerow([
+            sr,
+            pl.get("licencia", ""),
+            pl.get("scout", ""),
+            pl.get("supervisor", ""),
+            pl.get("pagado", ""),
+            pl.get("monto_pagado", ""),
+            pl.get("fecha_pago", ""),
+            pl.get("status", ""),
+            " | ".join(pl.get("deduced_actions", [])),
+            apply.get("action", ""),
+            apply.get("status", ""),
+            apply.get("saved", ""),
+            apply.get("message", ""),
+            " | ".join(apply.get("what_happened", [])),
+            pl.get("driver_id_resolved", ""),
+        ])
+
+    return buf.getvalue()
