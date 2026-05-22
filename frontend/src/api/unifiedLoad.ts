@@ -32,6 +32,7 @@ export interface UnifiedPreviewResponse {
   supervisors_to_create: number
   assignments_to_create: number
   assignments_to_change: number
+  assignments_already_exist: number
   payments_to_create: number
   already_paid: number
   amount_mismatch: number
@@ -98,6 +99,10 @@ export interface UnifiedApplyDetail {
   payment_created: boolean
   assignment_created: boolean
   what_happened?: string[] | null
+  action_requested?: string | null
+  action_executed?: string | null
+  skipped_reason?: string | null
+  existing_assignment_id?: number | null
 }
 
 export interface UnifiedApplyResponse {
@@ -109,10 +114,46 @@ export interface UnifiedApplyResponse {
   already_paid?: number
   not_found?: number
   details: UnifiedApplyDetail[]
+  assignments_new: number
+  assignments_existing: number
+  payments_new: number
+  payments_existing: number
+  commit_ok?: boolean | null
+  commit_error?: string | null
 }
 
 export async function downloadTemplate(): Promise<Blob> {
   const r = await api.get('/unified-load/template', { responseType: 'blob' })
+  return r.data
+}
+
+export async function downloadPreviewReport(file: File): Promise<Blob> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const r = await api.post('/unified-load/report/preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    responseType: 'blob',
+  })
+  return r.data
+}
+
+export async function downloadApplyReport(previewLines: any[], applyLines: any[]): Promise<Blob> {
+  const r = await api.post('/unified-load/report/apply', {
+    preview_lines: previewLines,
+    apply_lines: applyLines,
+  }, {
+    responseType: 'blob',
+  })
+  return r.data
+}
+
+export async function fetchPreviewResult(previewId: string): Promise<any> {
+  const r = await api.get(`/unified-load/preview-result/${previewId}`)
+  return r.data
+}
+
+export async function downloadRescueCsv(previewId: string): Promise<Blob> {
+  const r = await api.get(`/unified-load/rescue-csv/${previewId}`, { responseType: 'blob' })
   return r.data
 }
 
@@ -130,53 +171,74 @@ export async function previewUnifiedLoadStream(
   onLine: (line: any) => void,
   onSummary: (summary: any) => void,
   onError: (err: string) => void,
+  onEvent?: (event: any) => void,
 ): Promise<void> {
   const formData = new FormData()
   formData.append('file', file)
 
-  const response = await fetch('/api/scout-liq/unified-load/preview-stream', {
-    method: 'POST',
-    body: formData,
-  })
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 120000)
 
-  if (!response.ok) {
-    const text = await response.text()
-    onError(text)
-    return
-  }
+  try {
+    const response = await fetch('/api/scout-liq/unified-load/preview-stream', {
+      method: 'POST',
+      body: formData,
+      signal: controller.signal,
+    })
 
-  const reader = response.body?.getReader()
-  if (!reader) {
-    onError('No se pudo leer el stream')
-    return
-  }
+    if (!response.ok) {
+      const text = await response.text()
+      onError(text)
+      return
+    }
 
-  const decoder = new TextDecoder()
-  let buffer = ''
+    const reader = response.body?.getReader()
+    if (!reader) {
+      onError('No se pudo leer el stream')
+      return
+    }
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let lastEventTime = Date.now()
 
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
+    const readLoop = async () => {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
 
-    for (const line of lines) {
-      if (!line.trim()) continue
-      try {
-        const parsed = JSON.parse(line)
-        if (parsed.type === 'summary') {
-          onSummary(parsed)
-        } else if (parsed.type === 'structural_error') {
-          onError('Error estructural: ' + JSON.stringify(parsed))
-        } else {
-          onLine(parsed)
+        lastEventTime = Date.now()
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const parsed = JSON.parse(line)
+            if (parsed.type === 'summary') {
+              onSummary(parsed)
+            } else if (parsed.type === 'structural_error') {
+              onError('Error estructural: ' + JSON.stringify(parsed))
+            } else if (parsed.type === 'started' || parsed.type === 'file_parsed' ||
+                       parsed.type === 'caches_loading' || parsed.type === 'caches_progress' ||
+                       parsed.type === 'caches_loaded' || parsed.type === 'processing_started') {
+              if (onEvent) onEvent(parsed)
+            } else if (parsed.type === 'line') {
+              onLine(parsed)
+            } else {
+              onLine(parsed)
+            }
+          } catch {
+            // skip malformed lines
+          }
         }
-      } catch {
-        // skip malformed lines
       }
     }
+
+    await readLoop()
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 
