@@ -1225,6 +1225,8 @@ export interface CreateVersionPayload {
   payout_formula_type?: string
   currency: string
   tiers: { min_conversion_rate: number; payout_amount: number }[]
+  fixed_payout_amount?: number | null
+  minimum_enabled?: boolean
 }
 
 export interface HistoryItem {
@@ -1320,6 +1322,18 @@ export async function createCutoffFromCohort(params: {
   force_override?: boolean
 }): Promise<any> {
   const { data } = await api.post('/cutoffs/from-cohort', null, { params })
+  return data
+}
+
+// ── Barrido Pagable (Sweep) ──
+
+export async function createSweepCutoff(params: {
+  scheme_type?: string
+  origin_filter?: string
+  scout_type_filter?: string
+  created_by?: string
+}): Promise<any> {
+  const { data } = await api.post('/cutoffs/sweep', null, { params })
   return data
 }
 

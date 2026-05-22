@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react'
 import {
   getQualityContract, getSchemes,
-  createCutoff, createCutoffFromCohort, listCutoffs, getCutoffSummary, getCutoffLines,
+  createCutoff, createCutoffFromCohort, createSweepCutoff, listCutoffs, getCutoffSummary, getCutoffLines,
   reviewCutoff, approveCutoff, markCutoffPaid,
   getCutoffExportFinancialUrl, getOperationFilters,
 } from '../../api/scoutLiq'
 import type { SchemeResponse } from '../../api/scoutLiq'
 
 interface QualityContract { status: string; can_compute_trip_counts: boolean; uses_legacy_booleans_for_payment: boolean; sample_driver_trip_count: any; errors: string[] }
-interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string; cohort_iso_week?: string; cohort_from?: string; cohort_to?: string; maturity_days?: number; scheme_name?: string; scheme_type?: string; version_name?: string; min_activated?: number; activation_rule?: string; quality_rule?: string; snapshot_locked_at?: string }
+interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string; cohort_iso_week?: string; cohort_from?: string; cohort_to?: string; maturity_days?: number; scheme_name?: string; scheme_type?: string; version_name?: string; min_activated?: number; activation_rule?: string; quality_rule?: string; snapshot_locked_at?: string; config_snapshot?: any; cutoff_mode?: string }
 interface Summary { id: number; scout_id: number; scout_name: string; origin: string; total_affiliations: number; total_activated: number; drivers_1plus_0_7: number; drivers_5plus_0_7: number; drivers_1plus_8_14: number; drivers_5plus_0_14: number; total_converted_5v14d: number; not_converted: number; conversion_rate: number; conversion_rate_5v7d: number; conversion_5plus_0_7_rate: number; tier_reached: number; payment_per_converted_driver: number; payout_per_activated: number; amount_calculated: number; total_payable: number; status: string; blocked_reason: string; metric_used: string }
-interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string }
+interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string; payment_formula_explanation?: string }
 
 // ── Derived display helpers (PRESENTATIONAL – no business logic) ──
 
@@ -112,14 +112,44 @@ function LifecycleBadge({ status }: { status: string }) {
 
 // ── Payment Badge ──
 
-function PaymentBadge({ status, reason }: { status: string; reason?: string }) {
-  const color = PAYMENT_COLORS[status] || 'bg-gray-100 text-gray-500'
-  const label = PAYMENT_LABELS[status] || status
+function PaymentBadge({ status, reason, lineStatus }: { status: string; reason?: string; lineStatus?: string }) {
+  // If reason is empty and lineStatus is available, derive display
+  const effectiveStatus = lineStatus || status
+  const label = LINE_STATUS_LABELS[effectiveStatus] || PAYMENT_LABELS[effectiveStatus] || effectiveStatus
+  const color = LINE_STATUS_COLORS[effectiveStatus] || PAYMENT_COLORS[effectiveStatus] || 'bg-gray-100 text-gray-500'
   return (
     <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${color}`} title={reason || ''}>
       {label}
     </span>
   )
+}
+
+const LINE_STATUS_LABELS: Record<string, string> = {
+  payable: 'Pagable',
+  paid: 'Pagado',
+  blocked_min_activated: 'No llega al minimo',
+  blocked_already_paid: 'Ya pagado',
+  blocked_invalid_hire_date: 'Fecha invalida',
+  activated_no_tier: 'Sin tramo',
+  no_trip: 'Sin viajes',
+  below_pay_threshold: 'No cumple hito',
+  eligible: 'Elegible',
+  not_converted: 'No convierte',
+  blocked_min_affiliations: 'Min afiliaciones',
+}
+
+const LINE_STATUS_COLORS: Record<string, string> = {
+  payable: 'bg-green-100 text-green-700',
+  paid: 'bg-emerald-100 text-emerald-700',
+  blocked_min_activated: 'bg-amber-100 text-amber-700',
+  blocked_already_paid: 'bg-red-100 text-red-700',
+  blocked_invalid_hire_date: 'bg-red-100 text-red-700',
+  activated_no_tier: 'bg-orange-100 text-orange-700',
+  no_trip: 'bg-gray-100 text-gray-500',
+  below_pay_threshold: 'bg-gray-100 text-gray-500',
+  eligible: 'bg-blue-100 text-blue-700',
+  not_converted: 'bg-yellow-100 text-yellow-700',
+  blocked_min_affiliations: 'bg-amber-100 text-amber-700',
 }
 
 export default function LiquidadorView() {
@@ -145,7 +175,7 @@ export default function LiquidadorView() {
   const [formScheme, setFormScheme] = useState('')
   const [formOrigin, setFormOrigin] = useState('')
   // Cohort-based creation mode
-  const [createMode, setCreateMode] = useState<'dates' | 'cohort'>('cohort')
+  const [createMode, setCreateMode] = useState<'dates' | 'cohort' | 'sweep'>('cohort')
   const [formCohort, setFormCohort] = useState('')
   const [formSchemeType, setFormSchemeType] = useState('cabinet')
   const [cohorts, setCohorts] = useState<any[]>([])
@@ -205,6 +235,20 @@ export default function LiquidadorView() {
   })
 
   const originOptions = [...new Set(lines.map(l => l.origin).filter(Boolean))].sort()
+
+  const handleSweep = async () => {
+    if (!formSchemeType) { setError('Selecciona tipo de esquema'); return }
+    setLoading(true)
+    try {
+      await createSweepCutoff({
+        scheme_type: formSchemeType,
+        origin_filter: formOrigin || undefined,
+      })
+      load()
+    } catch (err: any) {
+      setError(err.response?.data?.detail || err.message)
+    } finally { setLoading(false) }
+  }
 
   const handleCreate = async () => {
     setLoading(true)
@@ -286,6 +330,10 @@ export default function LiquidadorView() {
               className={`px-3 py-1 text-xs rounded ${createMode === 'cohort' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
               Desde Cohorte
             </button>
+            <button onClick={() => setCreateMode('sweep')}
+              className={`px-3 py-1 text-xs rounded ${createMode === 'sweep' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              Barrido Pagable
+            </button>
             <button onClick={() => setCreateMode('dates')}
               className={`px-3 py-1 text-xs rounded ${createMode === 'dates' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
               Por Fechas
@@ -312,6 +360,30 @@ export default function LiquidadorView() {
             </div>
             <div className="flex items-end">
               <button onClick={handleCreate} disabled={!formCohort} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">Crear desde Cohorte</button>
+            </div>
+          </div>
+        ) : createMode === 'sweep' ? (
+          <div className="space-y-2">
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-xs text-purple-700">
+              Busca todos los conductores activos que cumplen la regla del esquema vigente hoy y que nunca fueron pagados. No se ejecuta automaticamente.
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Tipo Esquema</label>
+                <select value={formSchemeType} onChange={e => setFormSchemeType(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+                  <option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
+                </select>
+              </div>
+              <div><label className="block text-xs font-medium text-gray-500 mb-1">Origen (opcional)</label>
+                <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
+                  <option value="">Todos</option><option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
+                </select>
+              </div>
+              <div className="flex items-end">
+                <button onClick={handleSweep} disabled={!formSchemeType}
+                  className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50">
+                  Crear Barrido
+                </button>
+              </div>
             </div>
           </div>
         ) : (
@@ -363,7 +435,7 @@ export default function LiquidadorView() {
                       <span className="text-gray-300">—</span>
                     )}
                   </td>
-                  <td className="p-3"><span className={`px-2 py-0.5 rounded text-xs ${c.status === 'draft' ? 'bg-gray-100' : c.status === 'calculated' ? 'bg-blue-100 text-blue-700' : c.status === 'reviewed' ? 'bg-yellow-100 text-yellow-700' : c.status === 'approved' ? 'bg-green-100 text-green-700' : c.status === 'paid' ? 'bg-purple-100 text-purple-700' : 'bg-yellow-100 text-yellow-700'}`}>{c.status}</span></td>
+                  <td className="p-3"><span className={`px-2 py-0.5 rounded text-xs ${c.status === 'draft' ? 'bg-gray-100' : c.status === 'calculated' ? 'bg-blue-100 text-blue-700' : c.status === 'reviewed' ? 'bg-yellow-100 text-yellow-700' : c.status === 'approved' ? 'bg-green-100 text-green-700' : c.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{c.status}{c.cutoff_mode === 'PAYABLE_SWEEP' ? <span className="ml-1 px-1 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-medium">Barrido</span> : c.cohort_iso_week ? <span className="ml-1 px-1 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-medium">Cohorte</span> : null}</span></td>
                   <td className="p-3 flex gap-1 flex-wrap">
                     <button onClick={() => loadCutoffDetails(c.id)} className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs hover:bg-gray-200">Ver</button>
                     {c.status === 'calculated' && <button onClick={() => action(reviewCutoff, c.id, 'Revisar')} className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs hover:bg-yellow-200">Revisar</button>}
@@ -383,17 +455,39 @@ export default function LiquidadorView() {
         <div>
           {(() => {
             const c = cutoffs.find(x => x.id === selectedCutoff)
-            if (!c?.scheme_name) return null
+            if (!c) return null
+            const snap = c.config_snapshot
             return (
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs space-y-1">
-                <div className="font-semibold text-blue-800">Regla aplicada: {c.scheme_name} · {c.version_name}</div>
-                <div className="text-blue-600">
-                  Cohorte: {c.cohort_iso_week || `${c.hire_date_from} → ${c.hire_date_to}`}
-                  {c.maturity_days ? ` · Maduración: ${c.maturity_days} días` : ''}
-                  {c.min_activated ? ` · Mín activados: ${c.min_activated}` : ''}
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-semibold text-blue-800 text-sm">Regla usada en este corte</span>
+                  {c.cutoff_mode === 'PAYABLE_SWEEP' && (
+                    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-bold">Barrido Pagable</span>
+                  )}
+                  {(!c.cutoff_mode || c.cutoff_mode === 'COHORT') && c.cohort_iso_week && (
+                    <span className="px-2 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">Cohorte {c.cohort_iso_week}</span>
+                  )}
                 </div>
-                {c.activation_rule && <div className="text-blue-500">Base: {c.activation_rule} · Calidad: {c.quality_rule}</div>}
-                {c.snapshot_locked_at && <div className="text-gray-400">Snapshot: {c.snapshot_locked_at?.replace('T', ' ').slice(0, 19)}</div>}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 text-blue-700">
+                  <div><span className="text-blue-400">Esquema:</span> {snap?.scheme_name || c.scheme_name || '-'}</div>
+                  <div><span className="text-blue-400">Version:</span> {snap?.version_name || c.version_name || '-'}</div>
+                  <div><span className="text-blue-400">Cohorte:</span> {c.cohort_iso_week || (c.hire_date_from ? `${c.hire_date_from} -> ${c.hire_date_to}` : '-')}</div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 text-blue-600">
+                  <div><span className="text-blue-400">Hito base:</span> {snap?.activation_rule_label || c.activation_rule || '-'}</div>
+                  <div><span className="text-blue-400">Hito calidad:</span> {snap?.quality_rule_label || c.quality_rule || '-'}</div>
+                  <div><span className="text-blue-400">Formula:</span> {snap?.payment_formula_label || '-'}</div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 text-blue-600">
+                  <div><span className="text-blue-400">Minimo:</span> {snap?.minimum_rule_label || '-'}</div>
+                  <div><span className="text-blue-400">Tramos:</span> <span className="font-mono">{snap?.tier_summary_label || '-'}</span></div>
+                  <div><span className="text-blue-400">Pago:</span> {snap?.pays_on_label || '-'}</div>
+                </div>
+                {(snap?.frozen_at || c.snapshot_locked_at) && (
+                  <div className="text-gray-400 text-[10px]">
+                    Snapshot congelado: {(snap?.frozen_at || c.snapshot_locked_at || '').replace('T', ' ').slice(0, 19)}
+                  </div>
+                )}
               </div>
             )
           })()}
@@ -546,12 +640,18 @@ export default function LiquidadorView() {
                       </td>
                       <td className="p-1.5">
                         <PaymentBadge
-                          status={l.payment_status || '-'}
+                          status={l.payment_status || l.line_status || '-'}
                           reason={l.blocked_reason || undefined}
+                          lineStatus={l.line_status}
                         />
                       </td>
-                      <td className="p-2 text-[10px] text-gray-400 max-w-[160px] truncate" title={l.blocked_reason || l.payment_rule || ''}>
-                        {l.blocked_reason || l.payment_rule || '-'}
+                      <td className="p-2 text-[10px] text-gray-500 max-w-[200px]">
+                        <span
+                          className="cursor-help truncate block"
+                          title={l.payment_formula_explanation || l.blocked_reason || l.payment_rule || ''}
+                        >
+                          {l.payment_formula_explanation || l.blocked_reason || l.payment_rule || '-'}
+                        </span>
                       </td>
                       <td className="p-2 text-right font-mono text-[11px] font-medium whitespace-nowrap">
                         {l.payout_eligible_flag && l.calculated_amount

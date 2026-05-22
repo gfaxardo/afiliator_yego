@@ -365,7 +365,15 @@ def unified_preview(
         if row_errors:
             error_rows += 1
             lines.append({"source_row": row.get("_source_row", i + 2), "licencia": licencia,
-                "scout": scout_name, "status": "error", "errors": row_errors, "warnings": [],
+                "scout": scout_name, "supervisor": row.get("supervisor", ""),
+                "pagado": row.get("pagado", ""), "monto_pagado": 0,
+                "fecha_pago": row.get("fecha_pago", ""),
+                "observacion": row.get("observacion", ""),
+                "nombre_conductor": row.get("nombre_conductor", ""),
+                "origen": row.get("origen", ""),
+                "tipo_scout": row.get("tipo_scout", ""),
+                "motivo_pago": row.get("motivo_pago", ""),
+                "status": "error", "errors": row_errors, "warnings": [],
                 "deduced_actions": [], "driver_id_resolved": None, "scout_id_resolved": None})
             continue
 
@@ -375,10 +383,19 @@ def unified_preview(
             winner_idx = last_seen.get(resolved_driver, i)
             winner_row_nr = rows[winner_idx].get("_source_row", winner_idx + 2)
             lines.append({"source_row": row.get("_source_row", i + 2), "licencia": licencia,
-                "scout": scout_name, "status": "skipped_duplicate",
+                "scout": scout_name, "supervisor": row.get("supervisor", ""),
+                "pagado": row.get("pagado", ""), "monto_pagado": 0,
+                "fecha_pago": row.get("fecha_pago", ""),
+                "observacion": row.get("observacion", ""),
+                "nombre_conductor": row.get("nombre_conductor", ""),
+                "origen": row.get("origen", ""),
+                "tipo_scout": row.get("tipo_scout", ""),
+                "motivo_pago": row.get("motivo_pago", ""),
+                "status": "skipped_duplicate",
                 "errors": [], "warnings": [f"Driver duplicado en archivo. Fila ganadora: {winner_row_nr}"],
                 "deduced_actions": ["skipped_duplicate"],
                 "driver_id_resolved": resolved_driver,
+                "scout_id_resolved": None,
                 "duplicate_of_row": winner_row_nr})
             continue
 
@@ -439,6 +456,11 @@ def unified_preview(
             "scout": scout_name, "supervisor": supervisor_name,
             "pagado": row.get("pagado", ""), "monto_pagado": monto,
             "fecha_pago": row.get("fecha_pago", ""),
+            "observacion": row.get("observacion", ""),
+            "nombre_conductor": row.get("nombre_conductor", ""),
+            "origen": row.get("origen", ""),
+            "tipo_scout": row.get("tipo_scout", ""),
+            "motivo_pago": row.get("motivo_pago", ""),
             "status": "error" if line_errors else ("warning" if line_warnings else "ok"),
             "errors": line_errors, "warnings": line_warnings,
             "deduced_actions": deduced_actions,
@@ -924,11 +946,22 @@ def unified_preview_stream(db: Session, rows: List[dict]):
             "source_row": line.get("source_row", i + 2),
             "licencia": line.get("licencia", ""),
             "scout": line.get("scout", ""),
+            "supervisor": line.get("supervisor", ""),
+            "pagado": line.get("pagado", ""),
+            "monto_pagado": line.get("monto_pagado", ""),
+            "fecha_pago": line.get("fecha_pago", ""),
+            "observacion": line.get("observacion", ""),
+            "nombre_conductor": line.get("nombre_conductor", ""),
+            "origen": line.get("origen", ""),
+            "tipo_scout": line.get("tipo_scout", ""),
+            "motivo_pago": line.get("motivo_pago", ""),
             "status": line.get("status", "ok"),
             "errors": line.get("errors", []),
             "warnings": line.get("warnings", []),
             "deduced_actions": line.get("deduced_actions", []),
             "driver_id_resolved": line.get("driver_id_resolved"),
+            "scout_id_resolved": line.get("scout_id_resolved"),
+            "duplicate_of_row": line.get("duplicate_of_row"),
             "valid_rows": result["valid_rows"],
             "error_rows": result["error_rows"],
         }
@@ -1135,4 +1168,252 @@ def generate_apply_audit_csv(preview_lines: List[dict], apply_lines: List[dict])
             pl.get("driver_id_resolved", ""),
         ])
 
+    return buf.getvalue()
+
+
+def generate_full_audit_csv(
+    preview_lines: List[dict],
+    apply_lines: List[dict],
+    file_name: str = "",
+) -> str:
+    """
+    Genera un CSV de auditoria COMPLETA con TODAS las filas del input original.
+    Ninguna fila se omite. Incluye todas las columnas originales + columnas de auditoria.
+    El resumen va en archivo separado (generate_summary_csv).
+    """
+    apply_by_row: Dict[int, dict] = {}
+    for al in apply_lines:
+        sr = al.get("source_row") or al.get("row", 0)
+        apply_by_row[int(sr) if sr else 0] = al
+
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+
+    # BOM para compatibilidad Excel
+    w.writerow([
+        # Originales
+        "source_row",
+        "licencia",
+        "scout",
+        "supervisor",
+        "pagado",
+        "monto_pagado",
+        "fecha_pago",
+        "observacion",
+        "driver_id",
+        "nombre_conductor",
+        "origen",
+        "tipo_scout",
+        "motivo_pago",
+        "cohorte_iso",
+        # Auditoria
+        "row_hash",
+        "audit_status",
+        "action",
+        "saved",
+        "applied",
+        "rejected",
+        "conflict",
+        "ignored",
+        "already_paid",
+        "not_found",
+        "error_code",
+        "error_message",
+        "what_happened",
+        "rejection_reason",
+        "existing_scout_id",
+        "existing_scout_name",
+        "matched_driver_id",
+        "matched_driver_name",
+        "matched_license",
+        "matched_phone",
+        "assignment_id",
+        "payment_id",
+        "source_file",
+        "import_batch_id",
+        "processed_at",
+    ])
+
+    for pl in preview_lines:
+        sr = pl.get("source_row", "")
+        apply = apply_by_row.get(int(sr) if sr else 0, {})
+
+        preview_status = pl.get("status", "")
+        preview_actions = pl.get("deduced_actions", [])
+        preview_errors = pl.get("errors", [])
+        preview_warnings = pl.get("warnings", [])
+
+        apply_action = apply.get("action", "")
+        apply_status = apply.get("status", "")
+        apply_saved = apply.get("saved", False)
+        apply_message = apply.get("message", "")
+        apply_what = apply.get("what_happened", [])
+
+        audit_status = "ok"
+        action = apply_action or "not_processed"
+        rejected = False
+        conflict_flag = False
+        ignored_flag = False
+        already_paid_flag = False
+        not_found_flag = False
+        error_code = ""
+        error_message = ""
+        rejection_reason = ""
+        what_happened = " | ".join(apply_what) if apply_what else ""
+
+        if preview_status == "error" and "driver_not_found" in preview_actions:
+            audit_status = "rejected"
+            action = "driver_not_found"
+            not_found_flag = True
+            if not rejection_reason:
+                rejection_reason = "; ".join(preview_errors)
+        elif preview_status == "error":
+            audit_status = "rejected"
+            action = "validation_error"
+            rejected = True
+            rejection_reason = "; ".join(preview_errors)
+            error_message = rejection_reason
+        elif preview_status == "skipped_duplicate":
+            audit_status = "ignored"
+            action = "skipped_duplicate"
+            ignored_flag = True
+            if not rejection_reason:
+                rejection_reason = "; ".join(preview_warnings)
+        elif preview_status == "warning" and "already_paid" in preview_actions:
+            audit_status = "ok"
+            action = "already_paid"
+            already_paid_flag = True
+            what_happened = "Pago ya registrado — fila omitida"
+        elif not apply:
+            audit_status = "ignored"
+            action = preview_actions[0] if preview_actions else "not_processed"
+            ignored_flag = True
+            if not rejection_reason:
+                rejection_reason = "; ".join(preview_warnings + preview_errors) or "Fila no procesada"
+        elif apply_action == "duplicate_existing":
+            audit_status = "ok"
+            action = "no_change"
+            what_happened = "Ya existia asignacion activa"
+        elif apply_action in ("error",):
+            audit_status = "rejected"
+            action = "error"
+            rejected = True
+            rejection_reason = apply_message
+            error_message = apply_message
+        elif apply_action in ("driver_not_found", "scout_not_found"):
+            audit_status = "rejected"
+            not_found_flag = True
+            rejection_reason = apply_message
+        elif apply_action == "already_paid":
+            already_paid_flag = True
+        elif apply_action == "conflict_existing_active_scout":
+            audit_status = "conflict"
+            conflict_flag = True
+            rejection_reason = apply_message
+
+        if not what_happened:
+            if action == "not_processed":
+                what_happened = "Fila no procesada"
+            elif action == "no_change":
+                what_happened = "Sin cambios"
+            elif action == "already_paid":
+                what_happened = "Pago ya registrado"
+            elif not_found_flag:
+                what_happened = "Driver no encontrado"
+            elif ignored_flag:
+                what_happened = "Fila ignorada: " + rejection_reason
+            elif rejected:
+                what_happened = "Fila rechazada: " + rejection_reason
+
+        is_applied = apply_saved and audit_status == "ok" and action not in (
+            "not_processed", "no_change", "skipped_duplicate"
+        )
+
+        row_hash_raw = f"{pl.get('licencia','')}|{pl.get('scout','')}|{pl.get('supervisor','')}|{pl.get('monto_pagado','')}"
+        row_hash = ""
+        try:
+            import hashlib
+            row_hash = hashlib.md5(row_hash_raw.encode()).hexdigest()[:12]
+        except Exception:
+            pass
+
+        w.writerow([
+            sr,
+            pl.get("licencia", ""),
+            pl.get("scout", ""),
+            pl.get("supervisor", ""),
+            pl.get("pagado", ""),
+            pl.get("monto_pagado", ""),
+            pl.get("fecha_pago", ""),
+            pl.get("observacion", ""),
+            pl.get("driver_id_resolved", ""),
+            pl.get("nombre_conductor", ""),
+            pl.get("origen", ""),
+            pl.get("tipo_scout", ""),
+            pl.get("motivo_pago", ""),
+            pl.get("cohorte_iso", ""),
+            row_hash,
+            audit_status,
+            action,
+            "true" if apply_saved else "false",
+            "true" if is_applied else "false",
+            "true" if rejected else "false",
+            "true" if conflict_flag else "false",
+            "true" if ignored_flag else "false",
+            "true" if already_paid_flag else "false",
+            "true" if not_found_flag else "false",
+            error_code,
+            error_message,
+            what_happened,
+            rejection_reason,
+            pl.get("scout_id_resolved", ""),
+            pl.get("scout", ""),
+            pl.get("driver_id_resolved", ""),
+            pl.get("nombre_conductor", ""),
+            pl.get("licencia", ""),
+            "",
+            "",
+            "",
+            file_name,
+            "",
+            datetime.now().isoformat(),
+        ])
+
+    return buf.getvalue()
+
+
+def generate_summary_csv(
+    preview_result: dict,
+    apply_summary: dict,
+    total_preview_rows: int,
+    total_apply_rows: int,
+    file_name: str = "",
+) -> str:
+    """Genera un CSV de resumen independiente."""
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["metrica", "valor"])
+    w.writerow(["file_name", file_name])
+    w.writerow(["processed_at", datetime.now().isoformat()])
+    w.writerow(["audit_total_rows", total_preview_rows])
+    w.writerow(["input_total_rows", total_preview_rows])
+    w.writerow(["apply_total_rows", total_apply_rows])
+    w.writerow(["total_rows", preview_result.get("total_rows", 0)])
+    w.writerow(["valid_rows", preview_result.get("valid_rows", 0)])
+    w.writerow(["error_rows", preview_result.get("error_rows", 0)])
+    w.writerow(["duplicate_rows", preview_result.get("duplicate_rows", 0)])
+    w.writerow(["drivers_found", preview_result.get("drivers_found", 0)])
+    w.writerow(["drivers_not_found", preview_result.get("drivers_not_found", 0)])
+    w.writerow(["scouts_to_create", preview_result.get("scouts_to_create", 0)])
+    w.writerow(["assignments_to_create", preview_result.get("assignments_to_create", 0)])
+    w.writerow(["assignments_to_change", preview_result.get("assignments_to_change", 0)])
+    w.writerow(["payments_to_create", preview_result.get("payments_to_create", 0)])
+    w.writerow(["already_paid", preview_result.get("already_paid", 0)])
+    w.writerow(["applied", apply_summary.get("applied", 0)])
+    w.writerow(["skipped", apply_summary.get("skipped", 0)])
+    w.writerow(["no_change", apply_summary.get("no_change", 0)])
+    w.writerow(["conflicts", apply_summary.get("conflicts", 0)])
+    w.writerow(["errors", apply_summary.get("errors", 0)])
+    w.writerow(["commit_ok", str(apply_summary.get("commit_ok", True))])
+    w.writerow(["commit_error", apply_summary.get("commit_error", "") or ""])
     return buf.getvalue()

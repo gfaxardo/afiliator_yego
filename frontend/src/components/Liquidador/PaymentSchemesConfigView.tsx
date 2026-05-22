@@ -16,13 +16,19 @@ const RULE_LABELS: Record<string, string> = {
 }
 
 const FORMULA_LABELS: Record<string, string> = {
-  'ACTIVATED_X_TIER': 'Activados x Tier',
+  'ACTIVATED_X_TIER': 'Conversion por tramo',
   'QUALITY_X_FIXED': 'Calidad x Fijo',
+  'FIXED_PER_DRIVER': 'Pago fijo por driver',
+}
+
+const PAYOUT_LABELS: Record<string, string> = {
+  'ACTIVATED_X_TIER': 'Conversion por tramo',
+  'FIXED_PER_DRIVER': 'Pago fijo por driver',
 }
 
 const PAYS_ON_LABELS: Record<string, string> = {
-  'ACTIVATED_BASE': 'Base activada (volumen)',
-  'QUALITY_HIT': 'Hito de calidad',
+  'ACTIVATED_BASE': 'Paga por activados',
+  'QUALITY_HIT': 'Paga por calidad',
   'FIXED': 'Monto fijo',
 }
 
@@ -39,46 +45,46 @@ const PAYS_ON_COLORS: Record<string, string> = {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  active: 'bg-green-100 text-green-700 border-green-200',
-  closed: 'bg-blue-100 text-blue-700 border-blue-200',
+  active: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  closed: 'bg-blue-50 text-blue-600 border-blue-200',
   draft: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-  archived: 'bg-gray-100 text-gray-500 border-gray-200',
+  archived: 'bg-gray-100 text-gray-400 border-gray-200',
 }
 
 function statusLabel(v: SchemeVersionDetail): string {
   if (v.status === 'draft') return 'Borrador'
   if (v.status === 'archived') return 'Archivada'
-  if (v.status === 'active' && !v.valid_to_cohort_iso_week) return 'Activa vigente'
-  if (v.status === 'active' && v.valid_to_cohort_iso_week) return 'Cerrada'
+  if (v.status === 'active' && !v.valid_to_cohort_iso_week) return 'Vigente'
+  if (v.status === 'active' && v.valid_to_cohort_iso_week) return 'Historica'
   return v.status
 }
 
 function versionTypeLabel(v: SchemeVersionDetail): string | null {
   const name = (v.version_name || '').toLowerCase()
-  if (name.includes('transition')) return 'TRANSICIÓN'
-  if (name.includes('standard')) return 'ESTÁNDAR'
+  if (name.includes('transition')) return 'Transicion'
+  if (name.includes('standard')) return 'Estandar'
   return null
 }
 
 function versionTypeColor(v: SchemeVersionDetail): string {
   const label = versionTypeLabel(v)
-  if (label === 'TRANSICIÓN') return 'bg-amber-100 text-amber-700 border-amber-200'
-  if (label === 'ESTÁNDAR') return 'bg-emerald-100 text-emerald-700 border-emerald-200'
+  if (label === 'Transicion') return 'bg-amber-50 text-amber-600 border-amber-200'
+  if (label === 'Estandar') return 'bg-emerald-50 text-emerald-600 border-emerald-200'
   return ''
 }
 
 function versionTypeFromName(name: string | null): string | null {
   if (!name) return null
   const n = name.toLowerCase()
-  if (n.includes('transition')) return 'TRANSICIÓN'
-  if (n.includes('standard')) return 'ESTÁNDAR'
+  if (n.includes('transition')) return 'Transicion'
+  if (n.includes('standard')) return 'Estandar'
   return null
 }
 
 function versionTypeColorFromName(name: string | null): string {
   const label = versionTypeFromName(name)
-  if (label === 'TRANSICIÓN') return 'bg-amber-100 text-amber-700 border-amber-200'
-  if (label === 'ESTÁNDAR') return 'bg-emerald-100 text-emerald-700 border-emerald-200'
+  if (label === 'Transicion') return 'bg-amber-50 text-amber-600 border-amber-200'
+  if (label === 'Estandar') return 'bg-emerald-50 text-emerald-600 border-emerald-200'
   return ''
 }
 
@@ -88,6 +94,12 @@ function statusColor(v: SchemeVersionDetail): string {
   if (v.status === 'active' && !v.valid_to_cohort_iso_week) return STATUS_COLORS.active
   if (v.status === 'active' && v.valid_to_cohort_iso_week) return STATUS_COLORS.closed
   return 'bg-gray-100 text-gray-600 border-gray-200'
+}
+
+function versionRangeLabel(v: SchemeVersionDetail): string {
+  const from = v.valid_from_cohort_iso_week || '?'
+  const to = v.valid_to_cohort_iso_week || 'actualidad'
+  return `${from} → ${to}`
 }
 
 function Badge({ label, color }: { label: string; color?: string }) {
@@ -118,8 +130,11 @@ export default function PaymentSchemesConfigView() {
     activation_rule: '1V7D',
     quality_rule: '5V7D',
     formula_type: 'ACTIVATED_X_TIER',
+    payout_formula_type: 'ACTIVATED_X_TIER',
     currency: 'PEN',
     tiers: [{ min_conversion_rate: 0.1, payout_amount: 10 }],
+    fixed_payout_amount: 10,
+    minimum_enabled: true,
   })
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -311,17 +326,16 @@ export default function PaymentSchemesConfigView() {
             )}
 
             {/* D. Historical versions */}
-            <Section title={`Histórico de Versiones (${selectedScheme.versions.length})`}>
+            <Section title={`Linea de tiempo de versiones (${selectedScheme.versions.length})`}>
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-left text-[10px] text-gray-400 uppercase border-b border-gray-200">
                     <th className="px-2 py-1">Version</th>
-                    <th className="px-2 py-1">Desde</th>
-                    <th className="px-2 py-1">Hasta</th>
-                    <th className="px-2 py-1">Volumen</th>
-                    <th className="px-2 py-1">Min Vol</th>
+                    <th className="px-2 py-1">Vigencia</th>
+                    <th className="px-2 py-1">Regla</th>
+                    <th className="px-2 py-1">Min</th>
                     <th className="px-2 py-1">Estado</th>
-                    <th className="px-2 py-1">Accion</th>
+                    <th className="px-2 py-1 w-16"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -330,18 +344,17 @@ export default function PaymentSchemesConfigView() {
                       <td className="px-2 py-1 font-medium text-gray-700">
                         <span>{v.version_name}</span>
                         {versionTypeLabel(v) && (
-                          <Badge label={versionTypeLabel(v)!} color={versionTypeColor(v)} />
+                          <span className="ml-1"><Badge label={versionTypeLabel(v)!} color={versionTypeColor(v)} /></span>
                         )}
                       </td>
-                      <td className="px-2 py-1 font-mono text-gray-500">{v.valid_from_cohort_iso_week}</td>
-                      <td className="px-2 py-1 font-mono text-gray-400">{v.valid_to_cohort_iso_week || '\u2014'}</td>
-                      <td className="px-2 py-1 text-gray-600 font-mono text-[10px]">{(v.volume_rule || v.activation_rule)}</td>
+                      <td className="px-2 py-1 font-mono text-[10px] text-gray-500">{versionRangeLabel(v)}</td>
+                      <td className="px-2 py-1 text-gray-600 font-mono text-[10px]">{RULE_LABELS[v.activation_rule] || v.activation_rule}</td>
                       <td className="px-2 py-1 text-gray-600">{v.min_volume_count || v.min_activated}</td>
                       <td className="px-2 py-1"><Badge label={statusLabel(v)} color={statusColor(v)} /></td>
                       <td className="px-2 py-1">
                         {v.status === 'draft' && (
                           <button onClick={() => handleActivate(v.version_id, v.version_name)}
-                            className="text-[11px] bg-green-600 text-white px-2 py-0.5 rounded hover:bg-green-700 font-semibold">
+                            className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded hover:bg-emerald-700 font-semibold">
                             Activar
                           </button>
                         )}
@@ -366,54 +379,90 @@ export default function PaymentSchemesConfigView() {
                   {formError && <div className="bg-red-50 border border-red-200 text-red-700 rounded px-3 py-1.5 text-xs">{formError}</div>}
 
                   <div className="grid grid-cols-3 gap-3">
-                    <Field label="Nombre versión" value={form.version_name}
+                    <Field label="Nombre version" value={form.version_name}
                       onChange={v => setForm({ ...form, version_name: v })} placeholder="v2" />
                     <Field label="Cohorte desde (YYYY-WNN)" value={form.valid_from_cohort_iso_week}
                       onChange={v => setForm({ ...form, valid_from_cohort_iso_week: v })} placeholder="2026-W19" mono />
-                    <Field label="Maduración (días)" value={form.maturity_days}
+                    <Field label="Maduracion (dias)" value={form.maturity_days}
                       onChange={v => setForm({ ...form, maturity_days: Number(v) || 0 })} type="number" />
-                    <Field label="Mín. Activados" value={form.min_activated}
+                    <Field label="Min. Activados" value={form.min_activated}
                       onChange={v => setForm({ ...form, min_activated: Number(v) || 0 })} type="number" />
-                    <Field label="Regla activación" value={form.activation_rule}
+                    <Field label="Regla activacion" value={form.activation_rule}
                       onChange={v => setForm({ ...form, activation_rule: v })} />
                     <Field label="Regla calidad" value={form.quality_rule}
                       onChange={v => setForm({ ...form, quality_rule: v })} />
-                    <Field label="Fórmula" value={form.formula_type}
-                      onChange={v => setForm({ ...form, formula_type: v })} />
+                    {/* Formula type dropdown */}
+                    <div>
+                      <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Formula de pago</label>
+                      <select value={form.payout_formula_type}
+                        onChange={e => setForm({ ...form, payout_formula_type: e.target.value })}
+                        className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs bg-white">
+                        <option value="ACTIVATED_X_TIER">Conversion por tramo</option>
+                        <option value="FIXED_PER_DRIVER">Pago fijo por driver</option>
+                      </select>
+                    </div>
                     <Field label="Moneda" value={form.currency}
                       onChange={v => setForm({ ...form, currency: v })} />
+                    {/* Minimum toggle */}
+                    <label className="flex items-center gap-2 pt-5">
+                      <input type="checkbox" checked={form.minimum_enabled}
+                        onChange={e => setForm({ ...form, minimum_enabled: e.target.checked })}
+                        className="rounded border-gray-300 w-4 h-4" />
+                      <span className="text-[10px] text-gray-400 uppercase">Minimo habilitado</span>
+                    </label>
                   </div>
 
-                  {/* Tiers */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-semibold text-gray-500">Tiers</span>
-                      <button onClick={addTier} className="text-xs text-blue-600 hover:text-blue-800 font-medium">+ Agregar tier</button>
+                  <>
+                  {/* Fixed payout amount (only for FIXED_PER_DRIVER) */}
+                  {form.payout_formula_type === 'FIXED_PER_DRIVER' && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                      <div className="text-xs font-semibold text-green-800 mb-1">Pago fijo por driver</div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-green-700">S/</span>
+                        <input type="number" step="1" min="0" value={form.fixed_payout_amount}
+                          onChange={e => setForm({ ...form, fixed_payout_amount: parseFloat(e.target.value) || 0 })}
+                          className="w-24 border border-green-300 rounded px-2 py-1 text-sm font-bold font-mono" />
+                        <span className="text-xs text-green-600">por driver que cumple la regla</span>
+                      </div>
+                      {!form.minimum_enabled && (
+                        <div className="text-xs text-green-500 mt-1">Sin minimo de activados requerido</div>
+                      )}
                     </div>
-                    {form.tiers.map((t, i) => (
-                      <div key={i} className="flex gap-2 items-center mb-1">
-                        <span className="text-[10px] text-gray-400 w-6">#{i + 1}</span>
-                        <input type="number" step="0.01" min="0" max="1" value={t.min_conversion_rate}
-                          onChange={e => {
-                            const nt = [...form.tiers]
-                            nt[i] = { ...nt[i], min_conversion_rate: parseFloat(e.target.value) || 0 }
-                            setForm({ ...form, tiers: nt })
-                          }}
-                          className="w-20 border border-gray-200 rounded px-2 py-1 text-xs font-mono" />
-                        <span className="text-xs text-gray-400">→ S/</span>
-                        <input type="number" step="1" min="0" value={t.payout_amount}
-                          onChange={e => {
-                            const nt = [...form.tiers]
-                            nt[i] = { ...nt[i], payout_amount: parseFloat(e.target.value) || 0 }
-                            setForm({ ...form, tiers: nt })
-                          }}
-                          className="w-24 border border-gray-200 rounded px-2 py-1 text-xs font-mono" />
-                        {form.tiers.length > 1 && (
-                          <button onClick={() => removeTier(i)} className="text-red-400 hover:text-red-600 text-xs">✕</button>
-                        )}
+                  )}
+
+                  {/* Tiers (only for ACTIVATED_X_TIER / conversion) */}
+                  {form.payout_formula_type !== 'FIXED_PER_DRIVER' && (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold text-gray-500">Tiers</span>
+                        <button onClick={addTier} className="text-xs text-blue-600 hover:text-blue-800 font-medium">+ Agregar tier</button>
+                      </div>
+                      {form.tiers.map((t, i) => (
+                        <div key={i} className="flex gap-2 items-center mb-1">
+                          <span className="text-[10px] text-gray-400 w-6">#{i + 1}</span>
+                          <input type="number" step="0.01" min="0" max="1" value={t.min_conversion_rate}
+                            onChange={e => {
+                              const nt = [...form.tiers]
+                              nt[i] = { ...nt[i], min_conversion_rate: parseFloat(e.target.value) || 0 }
+                              setForm({ ...form, tiers: nt })
+                            }}
+                            className="w-20 border border-gray-200 rounded px-2 py-1 text-xs font-mono" />
+                          <span className="text-xs text-gray-400">{'\u2192'} S/</span>
+                          <input type="number" step="1" min="0" value={t.payout_amount}
+                            onChange={e => {
+                              const nt = [...form.tiers]
+                              nt[i] = { ...nt[i], payout_amount: parseFloat(e.target.value) || 0 }
+                              setForm({ ...form, tiers: nt })
+                            }}
+                            className="w-24 border border-gray-200 rounded px-2 py-1 text-xs font-mono" />
+                          {form.tiers.length > 1 && (
+                            <button onClick={() => removeTier(i)} className="text-red-400 hover:text-red-600 text-xs">x</button>
+                          )}
                       </div>
                     ))}
                   </div>
+                  )}
+                  </>
 
                   <div className="flex gap-2 pt-2">
                     <button onClick={handleCreateVersion} className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 font-semibold">

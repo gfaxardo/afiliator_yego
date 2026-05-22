@@ -33,15 +33,12 @@ from app.adapters.source_adapter import (
     get_quality_data_contract_status as adapter_get_quality_contract,
 )
 from app.services.cutoff_engine import (
-    create_cutoff_run,
-    calculate_cutoff,
-    get_cutoff_summary,
-    get_cutoff_lines,
-    review_cutoff,
-    approve_cutoff,
-    mark_cutoff_paid,
-    create_cutoff_from_cohort,
+    create_cutoff_run, calculate_cutoff, check_already_paid,
+    get_cutoff_summary, get_cutoff_lines,
+    review_cutoff, approve_cutoff, mark_cutoff_paid,
     export_cutoff_financial_csv,
+    create_cutoff_from_cohort,
+    create_sweep_cutoff,
 )
 from app.services.historical_import_service import (
     preview_historical_import,
@@ -129,6 +126,8 @@ from app.services.unified_load_service import (
     unified_apply_stream,
     generate_preview_audit_csv,
     generate_apply_audit_csv,
+    generate_full_audit_csv,
+    generate_summary_csv,
     _get_preview,
     _parse_rows_from_csv,
     _parse_rows_from_xlsx,
@@ -773,6 +772,33 @@ def create_cutoff_from_cohort_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/cutoffs/sweep")
+def create_sweep_cutoff_endpoint(
+    scheme_type: str = Query("cabinet", description="cabinet | fleet | custom"),
+    origin_filter: Optional[str] = None,
+    scout_type_filter: Optional[str] = None,
+    created_by: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Crea un cutoff en modo PAYABLE_SWEEP (barrido pagable).
+
+    Evalua TODOS los drivers activos que cumplen la regla del scheme vigente HOY
+    y que NO tienen paid_history bloqueante. Sin filtro de hire_date.
+    """
+    try:
+        result = create_sweep_cutoff(
+            db,
+            scheme_type=scheme_type,
+            origin_filter=origin_filter,
+            scout_type_filter=scout_type_filter,
+            created_by=created_by,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/cutoffs")
 def list_cutoffs(db: Session = Depends(get_db)):
     runs = db.query(CutoffRun).order_by(CutoffRun.created_at.desc()).all()
@@ -802,6 +828,10 @@ def list_cutoffs(db: Session = Depends(get_db)):
             "quality_rule": cfg.get("quality_rule"),
             "formula_type": cfg.get("formula_type"),
             "created_at": str(r.created_at) if r.created_at else None,
+            "notes": r.notes,
+            "cancelled_at": str(r.cancelled_at) if r.cancelled_at else None,
+            "cancelled_reason": r.cancelled_reason,
+            "config_snapshot": cfg,
         })
     return result
 
@@ -843,6 +873,7 @@ def get_cutoff(cutoff_id: int, db: Session = Depends(get_db)):
         "created_at": str(run.created_at) if run.created_at else None,
         "approved_at": str(run.approved_at) if run.approved_at else None,
         "paid_at": str(run.paid_at) if run.paid_at else None,
+        "cutoff_mode": run.cutoff_mode or "COHORT",
     }
 
 
@@ -2621,6 +2652,8 @@ def api_create_payment_scheme_version(
             counts_volume_rule=body.counts_volume_rule,
             counts_quality_rule=body.counts_quality_rule,
             maturity_window_days=body.maturity_window_days,
+            fixed_payout_amount=body.fixed_payout_amount,
+            minimum_enabled=body.minimum_enabled,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -3273,6 +3306,65 @@ async def unified_load_apply_report(
         headers={
             "Content-Disposition": "attachment; filename=reporte_final_carga.csv",
             "Content-Type": "text/csv; charset=utf-8-sig",
+        },
+    )
+
+
+@router.post("/unified-load/report/full-audit")
+async def unified_load_full_audit_report(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Descarga auditoria COMPLETA: TODAS las filas del input + columnas de auditoria.
+    Ninguna fila se omite. Incluye columnas originales del archivo y columnas de diagnostico."""
+    body = await request.json()
+    preview_lines = body.get("preview_lines", [])
+    apply_lines = body.get("apply_lines", [])
+    file_name = body.get("file_name", "")
+    preview_result = body.get("preview_result", {})
+    apply_summary = body.get("apply_summary", {})
+
+    if not preview_lines:
+        raise HTTPException(status_code=400, detail="preview_lines vacio o ausente")
+
+    # Generar BOM manualmente para compatibilidad Excel
+    csv_content = "\ufeff" + generate_full_audit_csv(
+        preview_lines, apply_lines, file_name
+    )
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=apply_full_audit_report.csv",
+            "Content-Type": "text/csv; charset=utf-8",
+        },
+    )
+
+
+@router.post("/unified-load/report/summary")
+async def unified_load_summary_report(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Descarga resumen de auditoria en CSV independiente."""
+    body = await request.json()
+    preview_result = body.get("preview_result", {})
+    apply_summary = body.get("apply_summary", {})
+    preview_lines = body.get("preview_lines", [])
+    apply_lines = body.get("apply_lines", [])
+    file_name = body.get("file_name", "")
+
+    csv_content = "\ufeff" + generate_summary_csv(
+        preview_result, apply_summary,
+        len(preview_lines), len(apply_lines),
+        file_name,
+    )
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=apply_summary.csv",
+            "Content-Type": "text/csv; charset=utf-8",
         },
     )
 

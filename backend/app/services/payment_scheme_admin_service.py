@@ -1,11 +1,15 @@
 """
-Payment Scheme Admin Service — CRUD para administrar esquemas de pago versionados.
+Payment Scheme Admin Service — SOURCE OF TRUTH para administrar reglas de pago.
+
+CRUD para PaymentScheme + PaymentSchemeVersion + PaymentSchemeTier.
+Este es el UNICO sistema activo de configuracion. El legacy (ConversionScheme)
+esta deprecado y es solo lectura historica.
 
 Reglas de negocio:
-1. No se editan versiones activas.
-2. Cambios crean nueva version.
-3. Activar version cierra la vigencia de la version activa anterior.
-4. No se permite overlap.
+1. No se editan versiones activas. Cambios crean nueva version.
+2. Activar version cierra automaticamente la vigencia de la version activa anterior.
+3. _check_overlap() garantiza que no haya 2 versiones activas solapadas en tiempo.
+4. Resolver retorna exactamente 1 version por (cohorte, scheme_type).
 5. No se puede archivar version usada por cutoff pagado/locked.
 6. Tiers validados (rate 0-1, amount >= 0, sin duplicados, min 1 tier).
 7. min_activated > 0, maturity_days > 0.
@@ -109,6 +113,8 @@ def get_payment_scheme_detail(db: Session, scheme_id: int) -> Dict[str, Any]:
             "created_at": str(v.created_at) if v.created_at else None,
             "activated_at": str(v.activated_at) if v.activated_at else None,
             "archived_at": str(v.archived_at) if v.archived_at else None,
+            "fixed_payout_amount": float(v.fixed_payout_amount) if v.fixed_payout_amount else None,
+            "minimum_enabled": bool(v.minimum_enabled),
             "tiers": [
                 {
                     "min_conversion_rate": float(t.min_conversion_rate),
@@ -188,6 +194,8 @@ def create_payment_scheme_version(
     counts_volume_rule: Optional[str] = None,
     counts_quality_rule: Optional[str] = None,
     maturity_window_days: Optional[int] = None,
+    fixed_payout_amount: Optional[float] = None,
+    minimum_enabled: bool = True,
 ) -> Dict[str, Any]:
     scheme = db.query(PaymentScheme).filter(PaymentScheme.id == scheme_id).first()
     if not scheme:
@@ -231,6 +239,8 @@ def create_payment_scheme_version(
         counts_volume_rule=counts_volume_rule or activation_rule,
         counts_quality_rule=counts_quality_rule or quality_rule,
         maturity_window_days=maturity_window_days or maturity_days,
+        fixed_payout_amount=Decimal(str(fixed_payout_amount)) if fixed_payout_amount else None,
+        minimum_enabled=minimum_enabled,
         status="draft",
     )
     db.add(version)

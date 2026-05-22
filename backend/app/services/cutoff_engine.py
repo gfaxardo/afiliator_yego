@@ -20,6 +20,12 @@ from app.models.scout_liq import (
 from app.adapters.source_adapter import compute_trip_counts_batch
 from app.services.cohort_service import iso_week_dates, cohort_maturity, get_iso_cohorts
 from app.services.payment_scheme_resolver import resolve_payment_scheme_for_cohort
+from app.services.cutoff_helpers import (
+    parse_rule, build_metric_code, build_rule_label,
+    build_minimum_rule_label, build_tier_summary_label,
+    build_pays_on_label, build_formula_label,
+    build_payment_explanation, compute_conversion_rate, resolve_tier,
+)
 
 
 def create_cutoff_run(
@@ -43,21 +49,48 @@ def create_cutoff_run(
         ConversionTier.active == True,
     ).order_by(ConversionTier.min_conversion_rate).all()
 
+    quality_rule_str = "5V7D"
+    metric_code = build_metric_code(quality_rule_str)
+
     config_snapshot = {
         "scheme_id": scheme.id,
         "scheme_name": scheme.scheme_name,
         "origin": scheme.origin,
         "scout_type": scheme.scout_type,
         "min_affiliations": scheme.min_affiliations,
+        "min_activated": scheme.min_affiliations or 8,
+        "activation_rule": "1V7D",
+        "quality_rule": quality_rule_str,
+        "volume_rule": "1V7D",
+        "pays_on_rule": "ACTIVATED_BASE",
+        "payout_formula_type": "ACTIVATED_X_TIER",
+        "formula_type": "ACTIVATED_X_TIER",
+        "currency": "PEN",
         "tiers": [
             {
                 "min_conversion_rate": float(t.min_conversion_rate),
                 "payment_per_converted_driver": float(t.payment_per_converted_driver),
+                "payout_amount": float(t.payment_per_converted_driver),
                 "currency": t.currency,
             }
             for t in tiers
         ],
-        "conversion_metric": "5plus_0_7",
+        "conversion_metric": metric_code,
+        "activation_metric_code": build_metric_code("1V7D"),
+        "quality_metric_code": metric_code,
+        "activation_rule_label": build_rule_label("1V7D"),
+        "quality_rule_label": build_rule_label(quality_rule_str),
+        "payment_formula_label": "activados x tramo",
+        "minimum_rule_label": build_minimum_rule_label(scheme.min_affiliations or 0),
+        "tier_summary_label": build_tier_summary_label(
+            [{"min_conversion_rate": float(t.min_conversion_rate),
+              "payout_amount": float(t.payment_per_converted_driver)} for t in tiers]
+        ),
+        "pays_on_label": "paga por conductor activado",
+        "fixed_payout_amount": None,
+        "minimum_enabled": True,
+        "formula_type_label": "Conversion por tramo",
+        "frozen_at": datetime.now().isoformat(),
     }
 
     run = CutoffRun(
@@ -72,7 +105,7 @@ def create_cutoff_run(
         config_snapshot=json.dumps(config_snapshot),
         created_by=created_by,
         quality_data_contract_status="ok",
-        conversion_metric_code="5plus_0_7",
+        conversion_metric_code=metric_code,
         conversion_metric_status="pending",
         source_mapping_snapshot=json.dumps({
             "driver_id": "module_ct_cabinet_drivers.driver_id",
@@ -94,13 +127,9 @@ def _parse_rule(rule_str: str):
     """
     Parse a volume/quality rule string like '1V7D' or '50V30D'.
     Returns (min_count, window_days). Defaults to (1, 7) if unparseable.
+    Delegates to cutoff_helpers.parse_rule for purity.
     """
-    if not rule_str:
-        return (1, 7)
-    m = re.match(r'(\d+)V(\d+)D', str(rule_str).strip(), re.IGNORECASE)
-    if m:
-        return (int(m.group(1)), int(m.group(2)))
-    return (1, 7)
+    return parse_rule(rule_str)
 
 
 def _get_trip_count_for_window(trip_counts: dict, driver_id: str, window_days: int) -> int:
@@ -150,22 +179,29 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
 
     vol_min, vol_days = _parse_rule(volume_rule_str)
     qual_min, qual_days = _parse_rule(quality_rule_str)
+    fixed_payout_amount = config.get("fixed_payout_amount")
+    minimum_enabled = config.get("minimum_enabled", True)
+    is_fixed = payout_formula_type == "FIXED_PER_DRIVER"
 
     # Clean previous lines/summaries
     db.query(CutoffDriverLine).filter(CutoffDriverLine.cutoff_run_id == cutoff_run_id).delete()
     db.query(CutoffScoutSummary).filter(CutoffScoutSummary.cutoff_run_id == cutoff_run_id).delete()
     db.flush()
 
-    # Get assignments matching window
+    # Get assignments matching window (or all active for PAYABLE_SWEEP)
     assignments = db.query(DriverAssignment, Scout).join(
         Scout, DriverAssignment.scout_id == Scout.id
     ).filter(
         DriverAssignment.status == "active",
-        DriverAssignment.hire_date.is_(None) | (
-            (DriverAssignment.hire_date >= run.hire_date_from)
-            & (DriverAssignment.hire_date <= run.hire_date_to)
-        ),
     )
+    # Hire date filter: only for COHORT mode, not for PAYABLE_SWEEP
+    if run.cutoff_mode != "PAYABLE_SWEEP" and run.hire_date_from and run.hire_date_to:
+        assignments = assignments.filter(
+            DriverAssignment.hire_date.is_(None) | (
+                (DriverAssignment.hire_date >= run.hire_date_from)
+                & (DriverAssignment.hire_date <= run.hire_date_to)
+            ),
+        )
     if run.origin_filter:
         assignments = assignments.filter(DriverAssignment.origin == run.origin_filter)
     if run.country_filter:
@@ -299,12 +335,23 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
         # ── Block check: use min_volume_count (semantic) or min_affiliations (legacy) ──
         min_volume = config.get("min_volume_count", min_aff)
         blocked_reason = None
-        if total_activated < min_volume:
+        if minimum_enabled and total_activated < min_volume:
             blocked_reason = f"Minimo {min_volume} volumen requerido, tiene {total_activated}"
 
         # ── Payment formula ──
-        pays_on_count = drivers_quality_hit if pays_on_rule == "QUALITY_HIT" else drivers_volume_base
-        amount = Decimal(str(pays_on_count)) * payment_per if tier_reached and not blocked_reason else Decimal("0")
+        if is_fixed and fixed_payout_amount:
+            tier_reached = None
+            payment_per = Decimal(str(fixed_payout_amount))
+            amount = Decimal(str(drivers_quality_hit if pays_on_rule == "QUALITY_HIT" else drivers_volume_base)) * payment_per if not blocked_reason else Decimal("0")
+        else:
+            tier_reached = None
+            payment_per = Decimal("0")
+            for t in tiers:
+                if rate_5plus >= Decimal(str(t["min_conversion_rate"])):
+                    tier_reached = t
+                    payment_per = Decimal(str(t["payout_amount"] if "payout_amount" in t else t.get("payment_per_converted_driver", 0)))
+            pays_on_count = drivers_quality_hit if pays_on_rule == "QUALITY_HIT" else drivers_volume_base
+            amount = Decimal(str(pays_on_count)) * payment_per if tier_reached and not blocked_reason else Decimal("0")
 
         summary = CutoffScoutSummary(
             cutoff_run_id=cutoff_run_id,
@@ -332,7 +379,7 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             conversion_1plus_0_7_rate=rate_1plus,
             conversion_5plus_0_7_rate=rate_5plus,
             conversion_5plus_0_14_rate=rate_5plus_14,
-            metric_used="5plus_0_7",
+            metric_used=build_metric_code(quality_rule_str),
             summary_status="ok",
         )
         db.add(summary)
@@ -356,25 +403,64 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 l.blocked_reason = "sin hire_date valida"
                 l.driver_lifecycle_status = "no_driver_id"
                 l.eligible = False
+                l.payment_formula_explanation = (
+                    f"Driver {l.driver_id}: sin hire_date valida. No se puede evaluar."
+                )
             elif l.already_paid:
                 l.line_status = "blocked_already_paid"
                 l.blocked_reason = "ya pagado en corte anterior"
                 l.payment_status = "blocked"
                 l.driver_lifecycle_status = _compute_lifecycle(trips_0_7, trips_0_14 - trips_0_7, trips_0_14)
                 l.eligible = False
+                if run.cutoff_mode == "PAYABLE_SWEEP":
+                    l.payment_formula_explanation = (
+                        f"Driver {l.driver_id}: cumple regla pero ya tiene pago previo bloqueante. "
+                        f"No paga (doble pago). Rescatado por barrido."
+                    )
+                else:
+                    l.payment_formula_explanation = (
+                        f"Driver {l.driver_id}: ya tiene pago previo bloqueante. No paga (doble pago)."
+                    )
             elif blocked_reason:
                 l.line_status = "blocked_min_activated"
                 l.blocked_reason = blocked_reason
                 l.payment_status = "blocked"
                 l.driver_lifecycle_status = _compute_lifecycle(trips_0_7, trips_0_14 - trips_0_7, trips_0_14)
                 l.eligible = False
+                l.payment_formula_explanation = (
+                    f"Scout {scout.scout_name}: {total_activated} activados de {min_volume} requeridos. "
+                    f"No alcanza el minimo. Driver {l.driver_id} no paga."
+                )
             else:
                 l.driver_lifecycle_status = _compute_lifecycle(trips_0_7, trips_0_14 - trips_0_7, trips_0_14)
                 l.is_converted_5trips_7d = trips_0_7 >= 5
                 l.is_converted_5trips_14d = (trips_0_7 + trips_8_14) >= 5
                 l.activated_flag = trips_0_7 >= 1
 
-                if tier_reached and driver_meets_pay_rule:
+                # FIXED_PER_DRIVER: no tier check needed, just pay rule
+                if is_fixed and driver_meets_pay_rule and not blocked_reason:
+                    l.line_status = "payable"
+                    l.payment_status = "payable"
+                    l.payout_eligible_flag = True
+                    l.calculated_amount = payment_per
+                    l.payment_rule = f"Fijo S/{float(payment_per):.0f} por driver"
+                    l.eligible = True
+                    l.payment_formula_explanation = (
+                        f"Driver {l.driver_id}: {trips_in_pay_window} viajes, "
+                        f"cumple regla {pay_threshold}V{pays_on_rule == 'QUALITY_HIT' and qual_days or vol_days}D. "
+                        f"Pago fijo S/{float(payment_per):.0f}."
+                    )
+                elif is_fixed and driver_meets_pay_rule and blocked_reason:
+                    l.line_status = "blocked_min_activated"
+                    l.blocked_reason = blocked_reason
+                    l.payment_status = "blocked"
+                    l.driver_lifecycle_status = _compute_lifecycle(trips_0_7, trips_0_14 - trips_0_7, trips_0_14)
+                    l.eligible = False
+                    l.payment_formula_explanation = (
+                        f"Scout {scout.scout_name}: {total_activated} activados de {min_volume} requeridos. "
+                        f"No alcanza el minimo. Driver {l.driver_id} no paga."
+                    )
+                elif tier_reached and driver_meets_pay_rule:
                     l.line_status = "payable"
                     l.payment_status = "payable"
                     l.payout_eligible_flag = True
@@ -382,12 +468,24 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                     tier_rate = tier_reached.get("min_conversion_rate", 0)
                     l.payment_rule = f"{tier_rate}% -> {payment_per} {tier_reached.get('currency', 'PEN')}"
                     l.eligible = True
+                    tier_pct = float(tier_rate) * 100
+                    sweep_note = " (rescatado por barrido)" if run.cutoff_mode == "PAYABLE_SWEEP" else ""
+                    l.payment_formula_explanation = (
+                        f"Scout {scout.scout_name}: {total_activated} activados, {drivers_quality_hit} convertidos "
+                        f"({float(rate_5plus)*100:.1f}% conversion). Alcanza tramo {tier_pct:.0f}% = S/{float(payment_per):.0f} por driver. "
+                        f"Driver {l.driver_id} ({trips_in_pay_window} viajes en ventana): PAGA S/{float(payment_per):.0f}.{sweep_note}"
+                    )
                 elif driver_meets_pay_rule:
                     l.line_status = "activated_no_tier"
                     l.payment_status = "blocked"
                     l.blocked_reason = "no_conversion_tier"
                     l.payout_eligible_flag = False
                     l.eligible = False
+                    l.payment_formula_explanation = (
+                        f"Driver {l.driver_id}: cumple regla ({trips_in_pay_window} viajes >= {pay_threshold}), "
+                        f"pero scout {scout.scout_name} no alcanzo ningun tramo "
+                        f"(conversion {float(rate_5plus)*100:.1f}%). No paga."
+                    )
                 else:
                     l.line_status = "no_trip" if trips_0_7 == 0 else "below_pay_threshold"
                     l.payment_status = "blocked"
@@ -398,6 +496,11 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                     )
                     l.payout_eligible_flag = False
                     l.eligible = False
+                    label = f"{pay_threshold}V{qual_days if pays_on_rule == 'QUALITY_HIT' else vol_days}D"
+                    l.payment_formula_explanation = (
+                        f"Driver {l.driver_id}: {trips_in_pay_window} viajes, "
+                        f"no alcanza regla {label} (requiere >= {pay_threshold}). No paga."
+                    )
 
     run.status = "calculated"
     run.conversion_metric_status = "ok"
@@ -488,6 +591,7 @@ def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = 
             "payment_rule": l.payment_rule,
             "source_quality_status": l.source_quality_status,
             "source_warning": l.source_warning,
+            "payment_formula_explanation": l.payment_formula_explanation,
         }
         for l in lines
     ]
@@ -659,6 +763,8 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
         # Pago
         "payment_status", "payment_origin", "payment_amount",
         "payment_reason", "trace_status", "trace_warning",
+        "payment_formula_explanation",
+        "cutoff_mode",
     ])
 
     # Cohorte fields (same for all rows)
@@ -764,6 +870,8 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
             l.payment_status or "not_payable", payment_origin,
             f"{float(l.calculated_amount or 0):.2f}",
             payment_reason, trace_status, trace_warning or "",
+            l.payment_formula_explanation or "",
+            run.cutoff_mode or "COHORT",
         ])
 
     return buf.getvalue()
@@ -863,6 +971,7 @@ def create_cutoff_from_cohort(
     maturity_at = cohort_maturity(cohort_to_date, resolved["maturity_days"])
     config_snapshot = _build_config_snapshot_from_resolved(resolved)
     cutoff_name = f"Corte {resolved['scheme_type']} {cohort['cohort_label']} ({cohort_iso_week})"
+    metric_code = build_metric_code(resolved.get("quality_rule", "5V7D"))
 
     run = CutoffRun(
         cutoff_name=cutoff_name,
@@ -874,7 +983,7 @@ def create_cutoff_from_cohort(
         config_snapshot=config_snapshot,
         created_by=created_by,
         quality_data_contract_status="ok",
-        conversion_metric_code="5plus_0_7",
+        conversion_metric_code=metric_code,
         conversion_metric_status="pending",
         source_mapping_snapshot=json.dumps({
             "driver_id": "module_ct_cabinet_drivers.driver_id",
@@ -972,7 +1081,24 @@ def _build_config_snapshot_from_resolved(resolved: dict) -> str:
     """Construye y congela config_snapshot JSON desde esquema versionado resuelto.
     Incluye campos legacy (min_affiliations, payment_per_converted_driver) para
     compatibilidad con calculate_cutoff existente.
+    Agrega labels legibles para auditoria.
     """
+    quality_rule_str = resolved.get("quality_rule", "5V7D")
+    activation_rule_str = resolved.get("activation_rule", "1V7D")
+    metric_code = build_metric_code(quality_rule_str)
+    tiers_list = [
+        {
+            "min_conversion_rate": t["min_conversion_rate"],
+            "payout_amount": t["payout_amount"],
+            "payment_per_converted_driver": t["payout_amount"],
+            "currency": resolved["currency"],
+            "sort_order": t.get("sort_order", 0),
+        }
+        for t in resolved["tiers"]
+    ]
+    payment_per = tiers_list[0]["payout_amount"] if tiers_list else 0
+    pays_on = resolved.get("pays_on_rule", "ACTIVATED_BASE")
+
     return json.dumps({
         "scheme_id": resolved["scheme_id"],
         "scheme_name": resolved["scheme_name"],
@@ -985,29 +1111,113 @@ def _build_config_snapshot_from_resolved(resolved: dict) -> str:
         "maturity_window_days": resolved.get("maturity_window_days", resolved["maturity_days"]),
         "min_activated": resolved["min_activated"],
         "min_volume_count": resolved.get("min_volume_count", resolved["min_activated"]),
-        "activation_rule": resolved["activation_rule"],
-        "volume_rule": resolved.get("volume_rule", resolved["activation_rule"]),
-        "quality_rule": resolved["quality_rule"],
-        "counts_volume_rule": resolved.get("counts_volume_rule", resolved["activation_rule"]),
-        "counts_quality_rule": resolved.get("counts_quality_rule", resolved["quality_rule"]),
+        "activation_rule": activation_rule_str,
+        "volume_rule": resolved.get("volume_rule", activation_rule_str),
+        "quality_rule": quality_rule_str,
+        "counts_volume_rule": resolved.get("counts_volume_rule", activation_rule_str),
+        "counts_quality_rule": resolved.get("counts_quality_rule", quality_rule_str),
         "formula_type": resolved["formula_type"],
         "pays_on_rule": resolved.get("pays_on_rule", ""),
         "payout_formula_type": resolved.get("payout_formula_type", resolved["formula_type"]),
         "currency": resolved["currency"],
-        # Legacy compatibilidad con calculate_cutoff
+        # Legacy compatibilidad
         "min_affiliations": resolved["min_activated"],
         "origin": resolved.get("scheme_type"),
         "scout_type": resolved.get("scheme_type"),
-        "tiers": [
-            {
-                "min_conversion_rate": t["min_conversion_rate"],
-                "payout_amount": t["payout_amount"],
-                "payment_per_converted_driver": t["payout_amount"],
-                "currency": resolved["currency"],
-                "sort_order": t.get("sort_order", 0),
-            }
-            for t in resolved["tiers"]
-        ],
-        "conversion_metric": "5plus_0_7",
+        "tiers": tiers_list,
+        # Derived labels for auditability
+        "conversion_metric": metric_code,
+        "activation_metric_code": build_metric_code(activation_rule_str),
+        "quality_metric_code": metric_code,
+        "activation_rule_label": build_rule_label(activation_rule_str),
+        "quality_rule_label": build_rule_label(quality_rule_str),
+        "payment_formula_label": build_formula_label(
+            resolved.get("payout_formula_type", resolved["formula_type"]),
+            pays_on, float(payment_per)
+        ),
+        "minimum_rule_label": build_minimum_rule_label(resolved["min_activated"]),
+        "tier_summary_label": build_tier_summary_label(tiers_list),
+        "pays_on_label": build_pays_on_label(pays_on),
+        "fixed_payout_amount": resolved.get("fixed_payout_amount"),
+        "minimum_enabled": resolved.get("minimum_enabled", True),
+        "formula_type_label": f"Pago fijo S/{float(resolved['fixed_payout_amount']):.0f} por driver" if resolved.get("fixed_payout_amount") is not None else "Conversion por tramo",
         "frozen_at": datetime.now().isoformat(),
     })
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BARRIDO PAGABLE (PAYABLE SWEEP)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def create_sweep_cutoff(
+    db: Session,
+    scheme_type: str = "cabinet",
+    origin_filter: Optional[str] = None,
+    scout_type_filter: Optional[str] = None,
+    created_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Crea un cutoff en modo PAYABLE_SWEEP (barrido pagable).
+
+    Evalua TODOS los drivers activos que:
+    - Cumplen la regla del scheme VIGENTE HOY
+    - NO tienen paid_history bloqueante
+    - Sin filtro de hire_date (a diferencia del cohorte)
+
+    Reutiliza calculate_cutoff() internamente.
+    """
+    from datetime import date as dt_date
+
+    today = dt_date.today()
+    today_iso = today.isocalendar()
+    today_cohort = f"{today_iso[0]}-W{today_iso[1]:02d}"
+
+    # Resolver scheme version vigente hoy
+    resolved = resolve_payment_scheme_for_cohort(db, today_cohort, scheme_type)
+    config_snapshot = _build_config_snapshot_from_resolved(resolved)
+
+    # Agregar metadata de sweep al snapshot
+    config_dict = json.loads(config_snapshot)
+    config_dict["cutoff_mode"] = "PAYABLE_SWEEP"
+    config_dict["sweep_generated_at"] = datetime.now().isoformat()
+    config_dict["sweep_cohort_today"] = today_cohort
+    config_snapshot = json.dumps(config_dict)
+
+    metric_code = build_metric_code(resolved.get("quality_rule", "5V7D"))
+    cutoff_name = f"Barrido {resolved['scheme_type']} {today.isoformat()}"
+
+    run = CutoffRun(
+        cutoff_name=cutoff_name,
+        hire_date_from=None,
+        hire_date_to=None,
+        origin_filter=origin_filter,
+        scout_type_filter=scout_type_filter or resolved.get("scheme_type"),
+        status="draft",
+        config_snapshot=config_snapshot,
+        created_by=created_by,
+        quality_data_contract_status="ok",
+        conversion_metric_code=metric_code,
+        conversion_metric_status="pending",
+        cutoff_mode="PAYABLE_SWEEP",
+        source_mapping_snapshot=json.dumps({
+            "driver_id": "module_ct_cabinet_drivers.driver_id",
+            "hire_date": "module_ct_cabinet_drivers.hire_date",
+            "origin": "module_ct_cabinet_drivers.origen",
+            "mode": "PAYABLE_SWEEP - sin filtro hire_date",
+        }),
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    result = calculate_cutoff(db, run.id)
+    return {
+        "cutoff_run_id": run.id,
+        "cutoff_name": run.cutoff_name,
+        "cutoff_mode": "PAYABLE_SWEEP",
+        "scheme_type": scheme_type,
+        "scheme_name": resolved["scheme_name"],
+        "version_name": resolved.get("version_name"),
+        "sweep_generated_at": datetime.now().isoformat(),
+        "calculation": result,
+    }

@@ -701,6 +701,8 @@ class CreateVersionRequest(BaseModel):
     payout_formula_type: Optional[str] = None
     currency: str = "PEN"
     tiers: List[TierInput]
+    fixed_payout_amount: Optional[float] = None
+    minimum_enabled: bool = True
 
 
 class VersionCreatedResponse(BaseModel):

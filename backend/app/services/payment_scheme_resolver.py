@@ -1,8 +1,14 @@
 """
-Payment Scheme Resolver — Resuelve que version de reglas aplica para una cohorte ISO y tipo de esquema.
+Payment Scheme Resolver — SOURCE OF TRUTH for payment rule resolution.
+
+Este es el UNICO resolver oficial. Siempre que el motor necesite determinar
+que reglas de pago aplican, debe consultar este resolver.
 
 Dado cohort_iso_week (ej. "2026-W18") y scheme_type (cabinet | fleet | custom),
-devuelve exactamente la version activa con sus tiers configurables.
+devuelve exactamente UNA version activa con sus tiers configurables.
+
+Sistema legacy (ConversionScheme + ConversionTier) esta deprecado.
+Usar solo PaymentScheme + PaymentSchemeVersion + PaymentSchemeTier.
 """
 
 import re
@@ -114,6 +120,8 @@ def resolve_payment_scheme_for_cohort(
         "pays_on_rule": version.pays_on_rule or "",
         "payout_formula_type": version.payout_formula_type or version.formula_type,
         "currency": version.currency,
+        "fixed_payout_amount": float(version.fixed_payout_amount) if version.fixed_payout_amount else None,
+        "minimum_enabled": bool(version.minimum_enabled),
         "tiers": [
             {
                 "min_conversion_rate": float(t.min_conversion_rate),
