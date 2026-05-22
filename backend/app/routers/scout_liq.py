@@ -4,8 +4,11 @@ import json
 import hashlib
 import time
 import logging
+import traceback
 from typing import Optional, List
 from datetime import date, datetime
+
+_logger = logging.getLogger("scout_liq")
 
 from fastapi import APIRouter, Depends, HTTPException, Query, File, UploadFile, Request
 from fastapi.responses import Response, StreamingResponse
@@ -125,6 +128,35 @@ from app.services.unified_load_service import (
     unified_apply_stream,
     _parse_rows_from_csv,
     _parse_rows_from_xlsx,
+)
+from app.services.scout_liq_health_service import (
+    get_health_summary,
+    get_health_summary_lite,
+    get_cohort_health,
+    get_source_health,
+    get_jobs_health,
+)
+from app.services.scout_liq_health_registry_service import (
+    full_refresh_cycle,
+    get_registry,
+    get_events,
+    compute_health_score,
+    compute_health_score_lite,
+)
+from app.services.scout_liq_payment_flow_service import (
+    create_payment_draft,
+    recalculate_draft,
+    review_cutoff_flow,
+    approve_cutoff_flow,
+    mark_cutoff_paid_flow,
+    cancel_cutoff,
+    undo_cutoff_status,
+    get_cutoff_report,
+    get_scout_payment_report,
+    get_cohort_payment_report,
+    export_cutoff_csv_full,
+    export_cutoff_xlsx,
+    get_payment_history_report,
 )
 from app.schemas.scout_liq import (
     ScoutCreate,
@@ -923,6 +955,176 @@ def export_cutoff_csv(cutoff_id: int, db: Session = Depends(get_db)):
         )
     return Response(content=csv_output.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename=cutoff_{cutoff_id}.csv"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PAYMENT FLOW: Flujo completo de pagos
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.post("/payments/drafts")
+def create_payment_draft_endpoint(
+    hire_date_from: date,
+    hire_date_to: date,
+    scheme_id: int,
+    origin: Optional[str] = None,
+    country: Optional[str] = None,
+    city: Optional[str] = None,
+    scout_type: Optional[str] = None,
+    notes: Optional[str] = None,
+    created_by: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        return create_payment_draft(
+            db,
+            hire_date_from=hire_date_from,
+            hire_date_to=hire_date_to,
+            scheme_id=scheme_id,
+            origin=origin,
+            country=country,
+            city=city,
+            scout_type=scout_type,
+            notes=notes,
+            created_by=created_by,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payments/{cutoff_run_id}/recalculate")
+def recalculate_draft_endpoint(cutoff_run_id: int, db: Session = Depends(get_db)):
+    try:
+        return recalculate_draft(db, cutoff_run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payments/{cutoff_run_id}/review")
+def review_cutoff_flow_endpoint(cutoff_run_id: int, db: Session = Depends(get_db)):
+    try:
+        return review_cutoff_flow(db, cutoff_run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payments/{cutoff_run_id}/approve")
+def approve_cutoff_flow_endpoint(
+    cutoff_run_id: int,
+    approved_by: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        return approve_cutoff_flow(db, cutoff_run_id, approved_by)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payments/{cutoff_run_id}/mark-paid")
+def mark_paid_flow_endpoint(
+    cutoff_run_id: int,
+    paid_by: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    try:
+        return mark_cutoff_paid_flow(db, cutoff_run_id, paid_by)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payments/{cutoff_run_id}/cancel")
+def cancel_cutoff_endpoint(
+    cutoff_run_id: int,
+    reason: str = Query(..., description="Motivo de cancelacion"),
+    db: Session = Depends(get_db),
+):
+    try:
+        return cancel_cutoff(db, cutoff_run_id, reason)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/payments/{cutoff_run_id}/undo-status")
+def undo_cutoff_status_endpoint(cutoff_run_id: int, db: Session = Depends(get_db)):
+    try:
+        return undo_cutoff_status(db, cutoff_run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/payments/{cutoff_run_id}")
+def get_payment_detail(cutoff_run_id: int, db: Session = Depends(get_db)):
+    try:
+        return get_cutoff_report(db, cutoff_run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/payments/{cutoff_run_id}/report")
+def get_payment_report(cutoff_run_id: int, db: Session = Depends(get_db)):
+    try:
+        return get_cutoff_report(db, cutoff_run_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/payments/{cutoff_run_id}/export.csv")
+def export_payment_csv(cutoff_run_id: int, db: Session = Depends(get_db)):
+    try:
+        csv_content = export_cutoff_csv_full(db, cutoff_run_id)
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=payment_{cutoff_run_id}.csv"},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/payments/{cutoff_run_id}/export.xlsx")
+def export_payment_xlsx(cutoff_run_id: int, db: Session = Depends(get_db)):
+    try:
+        xlsx_content = export_cutoff_xlsx(db, cutoff_run_id)
+        return Response(
+            content=xlsx_content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename=payment_{cutoff_run_id}.xlsx"},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/reports/scout/{scout_id}")
+def scout_payment_report_endpoint(
+    scout_id: int,
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        return get_scout_payment_report(db, scout_id, date_from, date_to)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/reports/cohort/{cohort_key}")
+def cohort_payment_report_endpoint(cohort_key: str, db: Session = Depends(get_db)):
+    try:
+        return get_cohort_payment_report(db, cohort_key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/reports/payment-history")
+def payment_history_report_endpoint(
+    scout_id: Optional[int] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    return get_payment_history_report(db, scout_id, date_from, date_to, limit, offset)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2532,6 +2734,181 @@ def dashboard_alerts(
 @router.get("/dashboard/trend")
 def dashboard_trend(db: Session = Depends(get_db)):
     return get_cutoff_trend(db)
+
+
+# ═══════════════════════════════════════════════════════════
+# HEALTH & FRESHNESS — Salud de datos operativos
+# ═══════════════════════════════════════════════════════════
+
+@router.get("/health/summary")
+def health_summary(
+    db: Session = Depends(get_db),
+    mode: Optional[str] = Query(None, description="lite (default, rapido) | full (incluye detalle cohorts)"),
+):
+    """Resumen ejecutivo de salud de datos. Default: lite (sin cohorts pesadas, sin trips)."""
+    try:
+        if mode == "full":
+            _logger.info("[GET /health/summary] mode=full")
+            return get_health_summary(db)
+        return get_health_summary_lite(db)
+    except Exception as e:
+        _logger.error(f"[GET /health/summary] mode={mode}: {e}\n{traceback.format_exc()}")
+        return {
+            "global_status": "UNKNOWN",
+            "evaluated_at": date.today().isoformat(),
+            "sections": {
+                "source": {"status": "UNKNOWN", "reason_text": "No disponible", "data_lag_days": None, "last_data_date": None},
+                "scouts": {"status": "UNKNOWN", "reason_text": "No disponible", "coverage_pct": None},
+                "cohorts": {"status": "UNKNOWN", "reason_text": "No disponible", "warning_count": 0, "blocked_count": 0},
+                "jobs": {"status": "UNKNOWN", "reason_text": "No disponible"},
+            },
+            "alerts": [],
+            "status": "ERROR",
+            "error_code": "HEALTH_SUMMARY_FAILED",
+            "message": str(e),
+        }
+
+
+@router.get("/health/cohorts")
+def health_cohorts(
+    weeks_limit: int = Query(4, ge=1, le=52, description="Ultimas N semanas a evaluar. Max 12. Default 4 para rendimiento."),
+    status: Optional[str] = Query(None, description="Filtrar por status: OK | WARNING | BLOCKED"),
+    db: Session = Depends(get_db),
+):
+    """Salud por cohorte: drivers, scouts, activaciones, maduracion, flags."""
+    try:
+        if weeks_limit > 12:
+            weeks_limit = 12
+        return get_cohort_health(db, weeks_limit=weeks_limit, status_filter=status)
+    except Exception as e:
+        _logger.error(f"[GET /health/cohorts] weeks_limit={weeks_limit} status={status}: {e}\n{traceback.format_exc()}")
+        return {
+            "cohorts": [],
+            "total_cohorts_visible": 0,
+            "global_status": "UNKNOWN",
+            "global_reason": f"No se pudo evaluar: {e}",
+            "warning_count": 0,
+            "blocked_count": 0,
+            "status": "ERROR",
+            "error_code": "COHORTS_FAILED",
+            "message": str(e),
+        }
+
+
+@router.get("/health/sources")
+def health_sources(db: Session = Depends(get_db)):
+    """Salud de la fuente operativa (module_ct_cabinet_drivers)."""
+    try:
+        return get_source_health(db)
+    except Exception as e:
+        _logger.error(f"[GET /health/sources] {e}\n{traceback.format_exc()}")
+        return {
+            "status": "UNKNOWN",
+            "reason_text": f"No se pudo evaluar: {e}",
+            "last_data_date": None,
+            "data_lag_days": None,
+            "evaluated_at": date.today().isoformat(),
+            "metrics": {},
+            "error_code": "SOURCES_FAILED",
+            "message": str(e),
+        }
+
+
+@router.get("/health/jobs")
+def health_jobs(db: Session = Depends(get_db)):
+    """Estado inferido de jobs/crons/procesos batch."""
+    try:
+        return get_jobs_health(db)
+    except Exception as e:
+        _logger.error(f"[GET /health/jobs] {e}\n{traceback.format_exc()}")
+        return {
+            "jobs": [],
+            "global_status": "UNKNOWN",
+            "global_reason": f"No se pudo evaluar: {e}",
+            "inferred_only": True,
+            "note": "Error al consultar infraestructura de jobs",
+            "error_code": "JOBS_FAILED",
+            "message": str(e),
+        }
+
+
+@router.get("/health/score")
+def health_score(
+    db: Session = Depends(get_db),
+    mode: Optional[str] = Query(None, description="lite (default, rapido) | full (incluye detalle cohorts)"),
+):
+    """Health score global 0-100 con breakdown. Default: lite (sin cohorts, sin trips)."""
+    try:
+        if mode == "full":
+            _logger.info("[GET /health/score] mode=full")
+            return compute_health_score(db)
+        return compute_health_score_lite(db)
+    except Exception as e:
+        _logger.error(f"[GET /health/score] mode={mode}: {e}\n{traceback.format_exc()}")
+        return {
+            "score": None,
+            "status": "UNKNOWN",
+            "reason_text": f"No se pudo calcular: {e}",
+            "breakdown": {},
+            "max_score": 100,
+            "evaluated_at": date.today().isoformat(),
+            "error_code": "SCORE_FAILED",
+            "message": str(e),
+        }
+
+
+@router.get("/health/registry")
+def health_registry(db: Session = Depends(get_db)):
+    """Lista el registro de refresh de fuentes y procesos."""
+    try:
+        return get_registry(db)
+    except Exception as e:
+        _logger.error(f"[GET /health/registry] {e}\n{traceback.format_exc()}")
+        return {
+            "entries": [],
+            "status": "ERROR",
+            "error_code": "REGISTRY_FAILED",
+            "message": str(e),
+        }
+
+
+@router.get("/health/events")
+def health_events(
+    status: Optional[str] = Query(None, description="open | resolved | all"),
+    severity: Optional[str] = Query(None, description="BLOCKED | WARNING | INFO"),
+    limit: int = Query(50, ge=1, le=500, description="Max eventos a retornar"),
+    db: Session = Depends(get_db),
+):
+    """Lista eventos de salud detectados."""
+    try:
+        return get_events(db, status=status, severity=severity, limit=limit)
+    except Exception as e:
+        _logger.error(f"[GET /health/events] status={status} severity={severity} limit={limit}: {e}\n{traceback.format_exc()}")
+        return {
+            "events": [],
+            "status": "ERROR",
+            "error_code": "EVENTS_FAILED",
+            "message": str(e),
+        }
+
+
+@router.post("/health/registry/refresh")
+def health_registry_refresh(db: Session = Depends(get_db)):
+    """Ejecuta ciclo completo: snapshot registry + detectar eventos + resolver recuperados + score."""
+    try:
+        return full_refresh_cycle(db)
+    except Exception as e:
+        _logger.error(f"[POST /health/registry/refresh] {e}\n{traceback.format_exc()}")
+        return {
+            "score": {"score": None, "status": "UNKNOWN"},
+            "registry": {"entries": [], "total": 0},
+            "events_detected": {"new_events": 0, "events": []},
+            "events_resolved": {"resolved_count": 0},
+            "cycle_completed_at": datetime.utcnow().isoformat(),
+            "status": "ERROR",
+            "error_code": "REFRESH_CYCLE_FAILED",
+            "message": str(e),
+        }
 
 
 # ═══════════════════════════════════════════════════════════

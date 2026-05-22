@@ -5,6 +5,7 @@ import {
   type CanonicalFreshness, type OperationDiagnosticResponse,
   resolvePaymentScheme, type ResolvedScheme,
   createManualOverride, getDriverOverrides, type ManualOverrideItem,
+  getHealthSummary, type HealthSummary,
 } from '../../api/scoutLiq'
 
 // ── LIFECYCLE desde datos canonicos ──
@@ -296,6 +297,43 @@ function FreshnessBanner({ freshness }: { freshness: CanonicalFreshness | null }
   )
 }
 
+// ── Health Status Banner ──
+
+function HealthStatusBanner() {
+  const [health, setHealth] = useState<HealthSummary | null>(null)
+
+  useEffect(() => {
+    getHealthSummary().then(setHealth).catch(() => {})
+  }, [])
+
+  if (!health || health.global_status === 'OK') return null
+
+  const colorMap: Record<string, string> = {
+    WARNING: 'bg-yellow-50 border-yellow-300 text-yellow-800',
+    BLOCKED: 'bg-red-50 border-red-300 text-red-800',
+    INFO: 'bg-blue-50 border-blue-300 text-blue-800',
+  }
+  const colors = colorMap[health.global_status] || 'bg-gray-50 border-gray-200 text-gray-600'
+
+  return (
+    <div className={`rounded border px-3 py-1.5 text-xs flex items-center gap-3 ${colors}`}>
+      <span className="font-semibold">
+        Salud de data: {health.global_status}
+      </span>
+      <span>·</span>
+      <span>
+        {health.sections.source.data_lag_days != null
+          ? `Lag ${health.sections.source.data_lag_days}d`
+          : health.sections.source.reason_text}
+      </span>
+      <span>·</span>
+      <a href="/scout-liq/salud" className="underline font-medium hover:opacity-80">
+        Ver Dashboard
+      </a>
+    </div>
+  )
+}
+
 // ── Motivo renderer ──
 
 const MOTIVO_COLORS: Record<string, string> = {
@@ -485,6 +523,7 @@ export default function OperationView() {
 
         {/* Freshness */}
         <FreshnessBanner freshness={data?.freshness ?? null} />
+        <HealthStatusBanner />
 
         {/* KPIs — Primary row */}
         <div className="grid grid-cols-8 gap-1.5">

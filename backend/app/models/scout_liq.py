@@ -150,6 +150,9 @@ class CutoffRun(Base):
     maturity_completed_at = Column(Date, nullable=True)
     ready_to_liquidate = Column(Boolean, default=False)
     snapshot_locked_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    cancelled_reason = Column(Text, nullable=True)
 
     summaries = relationship("CutoffScoutSummary", back_populates="cutoff_run")
     lines = relationship("CutoffDriverLine", back_populates="cutoff_run")
@@ -594,4 +597,49 @@ class ManualOverride(Base):
     status = Column(String(20), nullable=False, default="pending")
     blocks_future_payment = Column(Boolean, default=False)
     paid_history_id = Column(Integer, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HEALTH REGISTRY — Auto Health Monitoring
+# ═══════════════════════════════════════════════════════════════════════════
+
+class RefreshRegistry(Base):
+    __tablename__ = "scout_liq_refresh_registry"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_name = Column(String(255), nullable=False, unique=True)
+    source_type = Column(String(50), nullable=False, default="table")
+    last_seen_data_at = Column(DateTime, nullable=True)
+    last_refresh_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_error_at = Column(DateTime, nullable=True)
+    expected_frequency_minutes = Column(Integer, nullable=False, default=1440)
+    lag_minutes = Column(Integer, nullable=True)
+    rows_observed = Column(Integer, nullable=True)
+    status = Column(String(20), nullable=False, default="unknown")
+    reason_text = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class HealthEvent(Base):
+    __tablename__ = "scout_liq_health_events"
+    __table_args__ = (
+        Index("ix_health_events_dedup", "event_type", "source_name", "cohort_key",
+              postgresql_where=text("status = 'open'"),
+              unique=True),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    event_type = Column(String(100), nullable=False)
+    severity = Column(String(20), nullable=False, default="warning")
+    source_name = Column(String(255), nullable=True)
+    cohort_key = Column(String(20), nullable=True)
+    title = Column(String(500), nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(String(20), nullable=False, default="open")
+    detected_at = Column(DateTime, server_default=func.now())
+    resolved_at = Column(DateTime, nullable=True)
     metadata_json = Column(Text, nullable=True)

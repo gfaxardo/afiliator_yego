@@ -41,6 +41,53 @@ export interface UnifiedPreviewResponse {
   parse_metadata?: Record<string, any>
 }
 
+export type UnifiedApplyAction =
+  | 'created_assignment'
+  | 'reactivated_assignment'
+  | 'created_payment_history'
+  | 'no_change'
+  | 'already_paid'
+  | 'driver_not_found'
+  | 'scout_not_found'
+  | 'duplicate_existing'
+  | 'conflict_existing_active_scout'
+  | 'error'
+  | 'validation_error'
+
+export type UnifiedApplyLineStatus = 'ok' | 'warning' | 'manual_review' | 'error'
+
+export interface UnifiedApplyLine {
+  source_row?: number
+  row?: number
+  licencia?: string
+  scout?: string
+  driver_id?: string
+  scout_id?: number
+  scout_name?: string
+  action: UnifiedApplyAction
+  status: UnifiedApplyLineStatus
+  saved: boolean
+  message: string
+  what_happened?: string[]
+  error_code?: string | null
+}
+
+export interface UnifiedApplySummary {
+  total_rows?: number
+  applied: number
+  skipped?: number
+  created_assignment?: number
+  created_payment_history?: number
+  no_change: number
+  conflicts: number
+  already_paid: number
+  not_found: number
+  errors: number
+  commit_ok: boolean
+  commit_error?: string | null
+  done?: boolean
+}
+
 export interface UnifiedApplyDetail {
   source_row: number
   status: string
@@ -57,6 +104,10 @@ export interface UnifiedApplyResponse {
   applied: number
   skipped: number
   errors: number
+  no_change?: number
+  conflicts?: number
+  already_paid?: number
+  not_found?: number
   details: UnifiedApplyDetail[]
 }
 
@@ -129,10 +180,43 @@ export async function previewUnifiedLoadStream(
   }
 }
 
+export function parseApplyLine(raw: any): UnifiedApplyLine {
+  return {
+    source_row: raw.source_row ?? raw.row,
+    licencia: raw.licencia ?? '',
+    scout: raw.scout ?? '',
+    driver_id: raw.driver_id ?? '',
+    scout_id: raw.scout_id ?? undefined,
+    scout_name: raw.scout_name ?? raw.scout ?? '',
+    action: raw.action ?? (raw.status === 'error' ? 'error' : 'no_change'),
+    status: raw.status ?? 'ok',
+    saved: raw.saved ?? false,
+    message: raw.message ?? (raw.what_happened || []).join(' | ') ?? '',
+    what_happened: raw.what_happened ?? [],
+    error_code: raw.error_code ?? null,
+  }
+}
+
+export function parseApplySummary(raw: any): UnifiedApplySummary {
+  return {
+    total_rows: raw.total ?? raw.applied + (raw.skipped ?? 0),
+    applied: raw.applied ?? 0,
+    skipped: raw.skipped ?? 0,
+    no_change: raw.no_change ?? 0,
+    conflicts: raw.conflicts ?? 0,
+    already_paid: raw.already_paid ?? 0,
+    not_found: raw.not_found ?? 0,
+    errors: raw.errors ?? 0,
+    commit_ok: raw.commit_ok !== false,
+    commit_error: raw.commit_error ?? null,
+    done: raw.done ?? false,
+  }
+}
+
 export async function applyUnifiedLoadStream(
   plan: any[],
-  onLine: (line: any) => void,
-  onSummary: (summary: any) => void,
+  onLine: (line: UnifiedApplyLine) => void,
+  onSummary: (summary: UnifiedApplySummary) => void,
   onError: (err: string) => void,
 ): Promise<void> {
   const response = await fetch('/api/scout-liq/unified-load/apply-stream', {
@@ -163,8 +247,11 @@ export async function applyUnifiedLoadStream(
       if (!line.trim()) continue
       try {
         const parsed = JSON.parse(line)
-        if (parsed.type === 'summary') onSummary(parsed)
-        else onLine(parsed)
+        if (parsed.type === 'summary') {
+          onSummary(parseApplySummary(parsed))
+        } else {
+          onLine(parseApplyLine(parsed))
+        }
       } catch { /* skip */ }
     }
   }

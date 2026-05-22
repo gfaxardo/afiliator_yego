@@ -1375,3 +1375,418 @@ export async function createManualOverride(body: {
   const { data } = await api.post('/manual-overrides', body)
   return data
 }
+
+// ── Health & Freshness Dashboard ──
+
+export interface HealthSummarySection {
+  status: string
+  reason_text: string
+  data_lag_days?: number
+  last_data_date?: string
+  coverage_pct?: number
+  warning_count?: number
+  blocked_count?: number
+}
+
+export interface HealthAlert {
+  source: string
+  severity: string
+  message: string
+}
+
+export interface HealthSummary {
+  global_status: string
+  evaluated_at: string
+  sections: {
+    source: HealthSummarySection
+    scouts: HealthSummarySection
+    cohorts: HealthSummarySection
+    jobs: HealthSummarySection
+  }
+  alerts: HealthAlert[]
+}
+
+export interface CohortHealthFlags {
+  missing_scout_load_flag: boolean
+  no_activity_flag: boolean
+  missing_conversion_flag: boolean
+  stale_cohort_flag: boolean
+}
+
+export interface CohortHealthItem {
+  cohort_key: string
+  cohort_label: string
+  iso_year: number
+  iso_week: number
+  hire_date_from: string
+  hire_date_to: string
+  total_drivers: number
+  with_scout: number
+  without_scout: number
+  activated_1_trip: number
+  converted_5v7d: number
+  converted_5v14d: number
+  paid: number
+  unpaid: number
+  expected_7d_matured: boolean
+  expected_14d_matured: boolean
+  flags: CohortHealthFlags
+  diagnostics: string[]
+  status: string
+  reason_text: string
+  cutoff_status: string | null
+}
+
+export interface CohortHealthResponse {
+  cohorts: CohortHealthItem[]
+  total_cohorts_visible: number
+  global_status: string
+  global_reason: string
+  warning_count: number
+  blocked_count: number
+}
+
+export interface SourceHealthResponse {
+  status: string
+  reason_text: string
+  last_data_date: string | null
+  data_lag_days: number | null
+  evaluated_at: string
+  metrics: {
+    max_hire_date: string | null
+    min_hire_date: string | null
+    total_drivers: number
+    drivers_last_1d: number
+    drivers_last_3d: number
+    drivers_last_7d: number
+    last_updated_at: string | null
+    last_created_at: string | null
+  }
+}
+
+export interface JobHealthItem {
+  job_name: string
+  type: string
+  cron_detected: boolean
+  last_run: string | null
+  gap_hours: number | null
+  status: string
+  notes: string
+}
+
+export interface JobsHealthResponse {
+  jobs: JobHealthItem[]
+  global_status: string
+  global_reason: string
+  inferred_only: boolean
+  note: string
+}
+
+export async function getHealthSummary(): Promise<HealthSummary> {
+  const { data } = await api.get('/health/summary')
+  return data
+}
+
+export async function getHealthCohorts(weeksLimit?: number, status?: string): Promise<CohortHealthResponse> {
+  const { data } = await api.get('/health/cohorts', { params: { weeks_limit: weeksLimit, status } })
+  return data
+}
+
+export async function getHealthSources(): Promise<SourceHealthResponse> {
+  const { data } = await api.get('/health/sources')
+  return data
+}
+
+export async function getHealthJobs(): Promise<JobsHealthResponse> {
+  const { data } = await api.get('/health/jobs')
+  return data
+}
+
+// ── Health Registry / Auto Monitoring ──
+
+export interface HealthScoreBreakdown {
+  weight: number
+  status: string
+  score: number
+}
+
+export interface HealthScore {
+  score: number
+  status: string
+  reason_text: string
+  breakdown: {
+    source: HealthScoreBreakdown
+    scouts: HealthScoreBreakdown
+    cohorts: HealthScoreBreakdown
+    jobs: HealthScoreBreakdown
+  }
+  max_score: number
+  evaluated_at: string
+}
+
+export interface RegistryEntry {
+  id: number
+  source_name: string
+  source_type: string
+  last_seen_data_at: string | null
+  last_refresh_at: string | null
+  last_success_at: string | null
+  last_error_at: string | null
+  expected_frequency_minutes: number
+  lag_minutes: number | null
+  rows_observed: number | null
+  status: string
+  reason_text: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface HealthEventItem {
+  id: number
+  event_type: string
+  severity: string
+  source_name: string | null
+  cohort_key: string | null
+  title: string
+  message: string
+  status: string
+  detected_at: string
+  resolved_at: string | null
+}
+
+export interface RegistryRefreshResponse {
+  score: HealthScore
+  registry: {
+    refreshed_at: string
+    entries: RegistryEntry[]
+    total: number
+  }
+  events_detected: {
+    new_events: number
+    skipped_duplicates: number
+    events: { event_type: string; severity: string; title: string }[]
+    detected_at: string
+  }
+  events_resolved: {
+    resolved_count: number
+    total_open_before: number
+    resolved_at: string
+  }
+  cycle_completed_at: string
+}
+
+export async function getHealthScore(): Promise<HealthScore> {
+  const { data } = await api.get('/health/score')
+  return data
+}
+
+export async function getHealthRegistry(): Promise<RegistryEntry[]> {
+  const { data } = await api.get('/health/registry')
+  return data
+}
+
+export async function getHealthEvents(
+  status?: string,
+  severity?: string,
+  limit?: number
+): Promise<HealthEventItem[]> {
+  const { data } = await api.get('/health/events', { params: { status, severity, limit } })
+  return data
+}
+
+export async function refreshHealthRegistry(): Promise<RegistryRefreshResponse> {
+  const { data } = await api.post('/health/registry/refresh')
+  return data
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PAYMENT FLOW: Flujo completo de pagos
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface PaymentDraftParams {
+  hire_date_from: string
+  hire_date_to: string
+  scheme_id: number
+  origin?: string
+  country?: string
+  city?: string
+  scout_type?: string
+  notes?: string
+  created_by?: string
+}
+
+export interface PaymentDraftResult {
+  cutoff_run_id: number
+  cutoff_name: string
+  status: string
+  hire_date_from: string
+  hire_date_to: string
+  origin_filter: string | null
+  scheme_id: number
+  scheme_name: string
+  notes: string | null
+  calculation: any
+}
+
+export interface PaymentReport {
+  metadata: {
+    id: number
+    cutoff_name: string
+    status: string
+    hire_date_from: string | null
+    hire_date_to: string | null
+    origin_filter: string | null
+    country_filter: string | null
+    city_filter: string | null
+    scout_type_filter: string | null
+    notes: string | null
+    cohort_iso_week: string | null
+    cohort_from: string | null
+    cohort_to: string | null
+    created_by: string | null
+    created_at: string | null
+    approved_by: string | null
+    approved_at: string | null
+    paid_at: string | null
+    cancelled_at: string | null
+    cancelled_reason: string | null
+  }
+  config_snapshot: any
+  scout_summaries: any[]
+  totals: {
+    scouts_evaluated: number
+    drivers_total: number
+    drivers_payable: number
+    drivers_blocked: number
+    drivers_already_paid: number
+    drivers_paid_in_cutoff: number
+    amount_calculated_total: number
+    amount_approved_total: number
+    amount_paid_total: number
+  }
+  paid_history: any[]
+  driver_lines: any[]
+}
+
+export interface ScoutPaymentReport {
+  scout_id: number
+  scout_name: string
+  date_from: string | null
+  date_to: string | null
+  drivers_total: number
+  drivers_converted_5v7d: number
+  drivers_not_converted: number
+  drivers_blocked_already_paid: number
+  drivers_paid_in_window: number
+  conversion_rate_5v7d_pct: number
+  total_paid_amount: number
+  paid_history: any[]
+  driver_trips: any[]
+}
+
+export interface CohortPaymentReport {
+  cohort_key: string
+  cohort_from: string
+  cohort_to: string
+  readiness_status: string
+  drivers_total: number
+  drivers_with_scout: number
+  drivers_without_scout: number
+  drivers_converted_5v7d: number
+  drivers_payable: number
+  drivers_blocked_already_paid: number
+  drivers_paid_in_window: number
+  total_paid_amount: number
+}
+
+export interface PaymentHistoryReport {
+  total: number
+  limit: number
+  offset: number
+  items: any[]
+}
+
+export async function createPaymentDraft(params: PaymentDraftParams): Promise<PaymentDraftResult> {
+  const { data } = await api.post('/payments/drafts', null, { params })
+  return data
+}
+
+export async function recalculatePaymentDraft(cutoffRunId: number): Promise<any> {
+  const { data } = await api.post(`/payments/${cutoffRunId}/recalculate`)
+  return data
+}
+
+export async function reviewPayment(cutoffRunId: number): Promise<any> {
+  const { data } = await api.post(`/payments/${cutoffRunId}/review`)
+  return data
+}
+
+export async function approvePayment(cutoffRunId: number, approvedBy?: string): Promise<any> {
+  const params: any = {}
+  if (approvedBy) params.approved_by = approvedBy
+  const { data } = await api.post(`/payments/${cutoffRunId}/approve`, null, { params })
+  return data
+}
+
+export async function markPaymentPaid(cutoffRunId: number, paidBy?: string): Promise<any> {
+  const params: any = {}
+  if (paidBy) params.paid_by = paidBy
+  const { data } = await api.post(`/payments/${cutoffRunId}/mark-paid`, null, { params })
+  return data
+}
+
+export async function cancelPayment(cutoffRunId: number, reason: string): Promise<any> {
+  const { data } = await api.post(`/payments/${cutoffRunId}/cancel`, null, { params: { reason } })
+  return data
+}
+
+export async function undoPaymentStatus(cutoffRunId: number): Promise<any> {
+  const { data } = await api.post(`/payments/${cutoffRunId}/undo-status`)
+  return data
+}
+
+export async function getPaymentDetail(cutoffRunId: number): Promise<PaymentReport> {
+  const { data } = await api.get(`/payments/${cutoffRunId}`)
+  return data
+}
+
+export async function getPaymentReport(cutoffRunId: number): Promise<PaymentReport> {
+  const { data } = await api.get(`/payments/${cutoffRunId}/report`)
+  return data
+}
+
+export function getPaymentExportCsvUrl(cutoffRunId: number): string {
+  return `${api.defaults.baseURL}/payments/${cutoffRunId}/export.csv`
+}
+
+export function getPaymentExportXlsxUrl(cutoffRunId: number): string {
+  return `${api.defaults.baseURL}/payments/${cutoffRunId}/export.xlsx`
+}
+
+export async function getScoutPaymentReport(
+  scoutId: number,
+  dateFrom?: string,
+  dateTo?: string
+): Promise<ScoutPaymentReport> {
+  const params: any = {}
+  if (dateFrom) params.date_from = dateFrom
+  if (dateTo) params.date_to = dateTo
+  const { data } = await api.get(`/reports/scout/${scoutId}`, { params })
+  return data
+}
+
+export async function getCohortPaymentReport(cohortKey: string): Promise<CohortPaymentReport> {
+  const { data } = await api.get(`/reports/cohort/${encodeURIComponent(cohortKey)}`)
+  return data
+}
+
+export async function getPaymentHistoryReport(params?: {
+  scout_id?: number
+  date_from?: string
+  date_to?: string
+  limit?: number
+  offset?: number
+}): Promise<PaymentHistoryReport> {
+  const { data } = await api.get('/reports/payment-history', { params })
+  return data
+}

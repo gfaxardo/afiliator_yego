@@ -20,7 +20,9 @@ import PaymentSchemesConfigView from './components/Liquidador/PaymentSchemesConf
 import ReconciliationView from './components/Liquidador/ReconciliationView'
 import UnifiedLoadView from './components/Liquidador/UnifiedLoadView'
 import CentroCargaView from './components/Liquidador/CentroCargaView'
+import HealthDashboardView from './components/Liquidador/HealthDashboardView'
 import LegacyRedirectView from './components/Liquidador/LegacyRedirectView'
+import PaymentView from './components/Liquidador/PaymentView'
 
 const LEGACY_ENABLED = import.meta.env.VITE_ENABLE_LEGACY_IMPORTS === 'true'
 
@@ -43,6 +45,7 @@ function App() {
           <Route path="liquidador" element={<LiquidadorView />} />
           <Route path="centro-carga" element={<CentroCargaView />} />
           <Route path="configuracion" element={<PaymentSchemesConfigView />} />
+          <Route path="pagos" element={<PaymentView />} />
           <Route path="dashboard" element={<DashboardView />} />
 
           {/* ── Redirects: unified-load y reconciliation al Centro de Carga ── */}
@@ -82,6 +85,7 @@ function App() {
 
           {/* Health */}
           <Route path="health" element={<HealthCheck />} />
+          <Route path="salud" element={<HealthDashboardView />} />
         </Route>
         <Route path="*" element={<Navigate to="/scout-liq" replace />} />
       </Routes>

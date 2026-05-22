@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Any, Tuple
 
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.models.scout_liq import (
@@ -481,15 +482,57 @@ def unified_preview(
     }
 
 
+def _upsert_driver_assignment(db: Session, driver_id: str, scout_id: int,
+                               applied_by: str, licencia: Optional[str],
+                               origen: Optional[str], observacion: Optional[str],
+                               source_row: Optional[int]) -> str:
+    """
+    Idempotent assignment upsert.
+    Returns action: 'created', 'reactivated', 'no_change', 'duplicate_existing'
+    """
+    existing = db.query(DriverAssignment).filter(
+        DriverAssignment.driver_id == driver_id,
+        DriverAssignment.scout_id == scout_id,
+    ).first()
+
+    if existing:
+        if existing.status == "active":
+            return "no_change"
+        existing.status = "active"
+        existing.updated_at = datetime.now()
+        existing.assigned_by = applied_by or "unified_load"
+        existing.source_file = "unified_load.csv"
+        if source_row: existing.source_row = source_row
+        if licencia: existing.license_raw = licencia
+        if origen: existing.origin = origen
+        if observacion: existing.notes = observacion
+        return "reactivated"
+
+    db.add(DriverAssignment(
+        driver_id=driver_id, scout_id=scout_id,
+        origin=origen or None, status="active",
+        assigned_by=applied_by or "unified_load",
+        license_raw=licencia or None,
+        notes=observacion or None,
+        source_file="unified_load.csv",
+        source_row=source_row,
+    ))
+    return "created"
+
+
 def unified_apply(
     db: Session,
     rows: List[dict],
     applied_by: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Apply: procesa filas, crea scouts, asigna drivers, registra pagos."""
+    """Apply idempotente: usa savepoints por fila, upsert, captura UniqueViolation."""
     applied = 0
     skipped = 0
     errors_count = 0
+    no_change_count = 0
+    conflict_count = 0
+    already_paid_count = 0
+    not_found_count = 0
     details: List[dict] = []
 
     scout_cache = _build_scout_cache(db)
@@ -498,8 +541,8 @@ def unified_apply(
     all_driver_ids = list(set(r.get("driver_id", "") for r in rows if r.get("driver_id")))
     existing_drivers = _build_driver_id_cache(db, all_driver_ids)
     active_assignments = _build_active_assignment_cache(db)
+    blocking_paid = _build_blocking_paid_cache(db)
 
-    # Deduplicate: same driver in multiple rows → keep only LAST row
     seen: set = set()
     deduped = []
     for row in reversed(rows):
@@ -510,14 +553,24 @@ def unified_apply(
     deduped.reverse()
     if deduped: rows = deduped
 
+    any_applied = False
+
     for i, row in enumerate(rows):
         if "_source_row" not in row:
             row["_source_row"] = i + 2
+        source_row = row.get("_source_row", i + 2)
+
         row_errors = _validate_row(row)
         if row_errors:
             skipped += 1
-            details.append({"source_row": row.get("_source_row", 0), "status": "skipped", "reason": "; ".join(row_errors)})
+            details.append({
+                "source_row": source_row, "status": "skipped",
+                "action": "validation_error", "saved": False,
+                "message": "; ".join(row_errors),
+            })
             continue
+
+        sp = db.begin_nested()
         try:
             driver_id = row.get("driver_id", "")
             licencia = row.get("licencia", "")
@@ -528,8 +581,14 @@ def unified_apply(
             else:
                 resolved_driver = None
             if not resolved_driver:
-                skipped += 1
-                details.append({"source_row": row.get("_source_row", 0), "status": "skipped", "reason": "Driver no encontrado"})
+                not_found_count += 1
+                sp.rollback()
+                details.append({
+                    "source_row": source_row, "status": "skipped",
+                    "action": "driver_not_found", "saved": False,
+                    "message": "Driver no encontrado",
+                    "driver_id": None, "scout_id": None,
+                })
                 continue
 
             what_happened = []
@@ -544,6 +603,7 @@ def unified_apply(
                 scout_cache[scout_name.lower()] = (scout_id, row.get("supervisor") or "")
                 what_happened.append(f"Scout '{scout_name}' creado")
 
+            assign_action = "no_change"
             if scout_id:
                 current = active_assignments.get(resolved_driver)
                 if current and current != scout_id:
@@ -554,77 +614,158 @@ def unified_apply(
                     if old:
                         old.status = "inactive"; old.updated_at = datetime.now()
                     what_happened.append(f"Reasignado de scout {current}")
-                    db.add(DriverAssignment(driver_id=resolved_driver, scout_id=scout_id,
-                        origin=row.get("origen") or None, status="active",
-                        assigned_by=applied_by or "unified_load", license_raw=licencia or None,
-                        notes=row.get("observacion") or None, source_file="unified_load.csv",
-                        source_row=row.get("_source_row")))
-                    what_happened.append(f"Asignado a '{scout_name}'")
-                    active_assignments[resolved_driver] = scout_id
+                    assign_action = _upsert_driver_assignment(
+                        db, resolved_driver, scout_id,
+                        applied_by=applied_by or "unified_load",
+                        licencia=licencia or None,
+                        origen=row.get("origen") or None,
+                        observacion=row.get("observacion") or None,
+                        source_row=source_row,
+                    )
+                    if assign_action in ("created", "reactivated"):
+                        what_happened.append(f"Asignado a '{scout_name}'")
+                        active_assignments[resolved_driver] = scout_id
+                    elif assign_action == "no_change":
+                        what_happened.append(f"Ya asignado a '{scout_name}'")
                 elif not current:
-                    db.add(DriverAssignment(driver_id=resolved_driver, scout_id=scout_id,
-                        origin=row.get("origen") or None, status="active",
-                        assigned_by=applied_by or "unified_load", license_raw=licencia or None,
-                        notes=row.get("observacion") or None, source_file="unified_load.csv",
-                        source_row=row.get("_source_row")))
-                    what_happened.append(f"Asignado a '{scout_name}'")
-                    active_assignments[resolved_driver] = scout_id
+                    assign_action = _upsert_driver_assignment(
+                        db, resolved_driver, scout_id,
+                        applied_by=applied_by or "unified_load",
+                        licencia=licencia or None,
+                        origen=row.get("origen") or None,
+                        observacion=row.get("observacion") or None,
+                        source_row=source_row,
+                    )
+                    if assign_action in ("created", "reactivated"):
+                        what_happened.append(f"Asignado a '{scout_name}'")
+                        active_assignments[resolved_driver] = scout_id
+                    elif assign_action == "no_change":
+                        what_happened.append(f"Ya asignado a '{scout_name}'")
                 else:
                     what_happened.append(f"Ya asignado a '{scout_name}'")
 
             pagado = _parse_pagado(row.get("pagado", "NO"))
             monto = _parse_amount(row.get("monto_pagado", "0"))
+            payment_created = False
             if pagado and monto > 0:
-                db.add(PaidHistory(scout_id=scout_id, driver_id=resolved_driver,
-                    amount_paid=monto, currency="PEN",
-                    paid_at=_parse_date(row.get("fecha_pago", "")) or date.today(),
-                    import_source="unified_load", payment_component="unified_load",
-                    driver_license_raw=licencia or None, scout_name_raw=scout_name,
-                    reason=row.get("motivo_pago") or row.get("observacion") or None,
-                    status="paid", blocks_future_payment=True,
-                    source_file="unified_load.csv", source_row=row.get("_source_row")))
-                what_happened.append(f"Pago S/{monto:.0f}")
+                if resolved_driver in blocking_paid:
+                    already_paid_count += 1
+                    what_happened.append("Ya pagado")
+                else:
+                    db.add(PaidHistory(scout_id=scout_id, driver_id=resolved_driver,
+                        amount_paid=monto, currency="PEN",
+                        paid_at=_parse_date(row.get("fecha_pago", "")) or date.today(),
+                        import_source="unified_load", payment_component="unified_load",
+                        driver_license_raw=licencia or None, scout_name_raw=scout_name,
+                        reason=row.get("motivo_pago") or row.get("observacion") or None,
+                        status="paid", blocks_future_payment=True,
+                        source_file="unified_load.csv", source_row=source_row))
+                    what_happened.append(f"Pago S/{monto:.0f}")
+                    payment_created = True
 
             if not what_happened:
                 what_happened.append("Sin cambios")
 
+            sp.commit()
+            any_applied = True
             applied += 1
-            details.append({"source_row": row.get("_source_row", 0), "status": "applied",
-                "driver_id": resolved_driver, "scout_id": scout_id, "scout_name": scout_name,
-                "payment_created": pagado and monto > 0, "assignment_created": scout_id is not None,
-                "what_happened": what_happened})
-        except Exception as e:
-            errors_count += 1
-            details.append({"source_row": row.get("_source_row", 0), "status": "error", "reason": str(e)})
 
-    if applied > 0:
+            line_action = "no_change"
+            line_status = "ok"
+            if assign_action == "created":
+                line_action = "created_assignment"
+            elif assign_action == "reactivated":
+                line_action = "reactivated_assignment"
+            elif payment_created:
+                line_action = "created_payment_history"
+            elif pagado and resolved_driver in blocking_paid:
+                line_action = "already_paid"
+                line_status = "warning"
+            elif assign_action == "no_change":
+                line_action = "no_change"
+
+            details.append({
+                "source_row": source_row, "status": line_status,
+                "action": line_action, "saved": True,
+                "message": " | ".join(what_happened),
+                "driver_id": resolved_driver, "scout_id": scout_id,
+                "scout_name": scout_name,
+                "payment_created": payment_created,
+                "assignment_created": assign_action in ("created", "reactivated"),
+                "what_happened": what_happened,
+            })
+
+        except IntegrityError as e:
+            sp.rollback()
+            err_str = str(e).lower()
+            if "unique" in err_str and "uq_driver_scout_active" in err_str:
+                no_change_count += 1
+                details.append({
+                    "source_row": source_row, "status": "ok",
+                    "action": "duplicate_existing", "saved": False,
+                    "message": "Ya existia asignacion activa",
+                    "driver_id": resolved_driver if 'resolved_driver' in dir() else None,
+                    "scout_id": scout_id if 'scout_id' in dir() else None,
+                })
+            else:
+                errors_count += 1
+                details.append({
+                    "source_row": source_row, "status": "error",
+                    "action": "error", "saved": False,
+                    "message": str(e),
+                })
+        except Exception as e:
+            sp.rollback()
+            errors_count += 1
+            details.append({
+                "source_row": source_row, "status": "error",
+                "action": "error", "saved": False,
+                "message": str(e),
+            })
+
+    if any_applied:
         try:
             db.commit()
         except Exception as e:
             db.rollback()
-            return {"applied": 0, "skipped": len(rows), "errors": 1,
-                    "details": [{"source_row": 0, "status": "fatal_error", "reason": str(e)}]}
+            return {
+                "applied": 0, "skipped": len(rows), "errors": 1,
+                "details": [{"source_row": 0, "status": "fatal_error",
+                             "action": "error", "saved": False, "message": str(e)}],
+            }
 
-    return {"applied": applied, "skipped": skipped, "errors": errors_count, "details": details}
+    return {
+        "applied": applied, "skipped": skipped, "errors": errors_count,
+        "no_change": no_change_count, "conflicts": conflict_count,
+        "already_paid": already_paid_count, "not_found": not_found_count,
+        "details": details,
+    }
 
 
 def unified_apply_stream(db: Session, plan: List[dict], applied_by: Optional[str] = None):
     """
-    Generator: ejecuta apply_plan (del preview). NO recalcula.
-    Cada entrada del plan es una accion deterministica.
+    Generator idempotente: ejecuta apply_plan con savepoint por fila,
+    upsert de asignaciones, captura de UniqueViolation.
     """
     applied = 0; skipped = 0; errors_count = 0; total = len(plan)
+    no_change_count = 0; conflict_count = 0; already_paid_count = 0
+    not_found_count = 0
     scout_cache = _build_scout_cache(db)
     active_assignments = _build_active_assignment_cache(db)
+    blocking_paid = _build_blocking_paid_cache(db)
+
+    commit_ok = True
+    commit_error = None
 
     for i, entry in enumerate(plan):
+        source_row = entry.get("source_row", 0)
+        sp = db.begin_nested()
         try:
             resolved_driver = entry["driver_id"]
             scout_name = entry["scout_name"]
             scout_id = entry.get("scout_id")
             what = []
 
-            # Create scout if needed
             if entry.get("create_scout") or not scout_id:
                 s = Scout(scout_name=scout_name, scout_type=entry.get("tipo_scout") or None,
                           supervisor_name_raw=entry.get("supervisor") or None,
@@ -633,7 +774,7 @@ def unified_apply_stream(db: Session, plan: List[dict], applied_by: Optional[str
                 scout_cache[scout_name.lower()] = (scout_id, entry.get("supervisor") or "")
                 what.append(f"Scout '{scout_name}' creado")
 
-            # Assignment
+            assign_action = "no_change"
             if entry.get("create_assignment") and scout_id:
                 cur = active_assignments.get(resolved_driver)
                 reassign_from = entry.get("reassign_from")
@@ -642,55 +783,123 @@ def unified_apply_stream(db: Session, plan: List[dict], applied_by: Optional[str
                         DriverAssignment.driver_id == resolved_driver,
                         DriverAssignment.scout_id == cur,
                         DriverAssignment.status == "active").first()
-                    if old: old.status = "inactive"; old.updated_at = datetime.now()
+                    if old:
+                        old.status = "inactive"; old.updated_at = datetime.now()
                     what.append(f"Reasignado de scout {cur}")
                 if cur != scout_id:
-                    db.add(DriverAssignment(driver_id=resolved_driver, scout_id=scout_id,
-                        origin=entry.get("origen") or None, status="active",
-                        assigned_by=applied_by or "unified_load",
-                        license_raw=entry.get("licencia") or None,
-                        notes=entry.get("observacion") or None,
-                        source_file="unified_load.csv",
-                        source_row=entry.get("source_row")))
-                    what.append(f"Asignado a '{scout_name}'")
-                    active_assignments[resolved_driver] = scout_id
+                    assign_action = _upsert_driver_assignment(
+                        db, resolved_driver, scout_id,
+                        applied_by=applied_by or "unified_load",
+                        licencia=entry.get("licencia") or None,
+                        origen=entry.get("origen") or None,
+                        observacion=entry.get("observacion") or None,
+                        source_row=source_row,
+                    )
+                    if assign_action in ("created", "reactivated"):
+                        what.append(f"Asignado a '{scout_name}'")
+                        active_assignments[resolved_driver] = scout_id
+                    elif assign_action == "no_change":
+                        what.append(f"Ya asignado a '{scout_name}'")
                 else:
                     what.append(f"Ya asignado a '{scout_name}'")
 
-            # Payment
+            payment_created = False
             if entry.get("create_payment") and entry.get("amount", 0) > 0:
-                db.add(PaidHistory(scout_id=scout_id, driver_id=resolved_driver,
-                    amount_paid=entry["amount"], currency="PEN",
-                    paid_at=_parse_date(entry.get("fecha_pago", "")) or date.today(),
-                    import_source="unified_load", payment_component="unified_load",
-                    driver_license_raw=entry.get("licencia") or None,
-                    scout_name_raw=scout_name,
-                    reason=entry.get("motivo_pago") or entry.get("observacion") or None,
-                    status="paid", blocks_future_payment=True,
-                    source_file="unified_load.csv", source_row=entry.get("source_row")))
-                what.append(f"Pago S/{entry['amount']:.0f}")
+                if resolved_driver in blocking_paid:
+                    already_paid_count += 1
+                    what.append("Ya pagado")
+                else:
+                    db.add(PaidHistory(scout_id=scout_id, driver_id=resolved_driver,
+                        amount_paid=entry["amount"], currency="PEN",
+                        paid_at=_parse_date(entry.get("fecha_pago", "")) or date.today(),
+                        import_source="unified_load", payment_component="unified_load",
+                        driver_license_raw=entry.get("licencia") or None,
+                        scout_name_raw=scout_name,
+                        reason=entry.get("motivo_pago") or entry.get("observacion") or None,
+                        status="paid", blocks_future_payment=True,
+                        source_file="unified_load.csv", source_row=source_row))
+                    what.append(f"Pago S/{entry['amount']:.0f}")
+                    payment_created = True
 
-            if not what: what.append("Sin cambios")
+            if not what:
+                what.append("Sin cambios")
+
+            sp.commit()
             applied += 1
-            yield {"type": "line", "index": i, "total": total,
-                   "source_row": entry.get("source_row", 0),
-                   "licencia": entry.get("licencia", ""), "scout": scout_name,
-                   "status": "applied", "driver_id": resolved_driver,
-                   "what_happened": what, "applied": applied, "skipped": skipped}
 
+            line_action = "no_change"
+            line_status = "ok"
+            if assign_action == "created":
+                line_action = "created_assignment"
+            elif assign_action == "reactivated":
+                line_action = "reactivated_assignment"
+            elif payment_created:
+                line_action = "created_payment_history"
+            elif entry.get("create_payment") and resolved_driver in blocking_paid:
+                line_action = "already_paid"
+                line_status = "warning"
+
+            yield {
+                "type": "line", "index": i, "total": total,
+                "source_row": source_row,
+                "licencia": entry.get("licencia", ""), "scout": scout_name,
+                "action": line_action, "status": line_status,
+                "saved": True, "message": " | ".join(what),
+                "driver_id": resolved_driver,
+                "what_happened": what, "applied": applied, "skipped": skipped,
+            }
+
+        except IntegrityError as e:
+            sp.rollback()
+            err_str = str(e).lower()
+            if "unique" in err_str and "uq_driver_scout_active" in err_str:
+                no_change_count += 1
+                yield {
+                    "type": "line", "index": i, "total": total,
+                    "source_row": source_row,
+                    "action": "duplicate_existing", "status": "ok",
+                    "saved": False, "message": "Ya existia asignacion activa",
+                    "applied": applied, "skipped": skipped,
+                }
+            else:
+                errors_count += 1
+                yield {
+                    "type": "line", "index": i, "total": total,
+                    "source_row": source_row,
+                    "action": "error", "status": "error",
+                    "saved": False, "message": str(e),
+                    "applied": applied, "skipped": skipped,
+                }
         except Exception as e:
+            sp.rollback()
             errors_count += 1
-            yield {"type": "line", "index": i, "total": total,
-                   "source_row": entry.get("source_row", 0),
-                   "status": "error", "reason": str(e),
-                   "applied": applied, "skipped": skipped}
+            yield {
+                "type": "line", "index": i, "total": total,
+                "source_row": source_row,
+                "action": "error", "status": "error",
+                "saved": False, "message": str(e),
+                "applied": applied, "skipped": skipped,
+            }
 
-    ok, err = True, None
     if applied > 0:
-        try: db.commit()
-        except Exception as e: db.rollback(); ok = False; err = str(e)
-    yield {"type": "summary", "applied": applied, "skipped": skipped,
-           "errors": errors_count, "commit_ok": ok, "commit_error": err, "done": True}
+        try:
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            commit_ok = False
+            commit_error = str(e)
+
+    yield {
+        "type": "summary",
+        "applied": applied, "skipped": skipped,
+        "errors": errors_count,
+        "no_change": no_change_count,
+        "conflicts": conflict_count,
+        "already_paid": already_paid_count,
+        "not_found": not_found_count,
+        "commit_ok": commit_ok, "commit_error": commit_error,
+        "done": True,
+    }
 
 
 def unified_preview_stream(db: Session, rows: List[dict]):
