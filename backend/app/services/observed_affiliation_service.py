@@ -232,6 +232,29 @@ def preview_observed_affiliations(
     official_missing = sum(1 for l in preview_lines if l["official_source_status"] == "official_missing")
     error_count = sum(1 for l in preview_lines if l["has_error"])
 
+    # Duplicate claim detection: same matched_driver_id claimed by different scouts
+    driver_scout_map: Dict[str, set] = {}
+    for l in preview_lines:
+        did = l.get("matched_driver_id")
+        scout = l.get("scout")
+        if did:
+            driver_scout_map.setdefault(did, set()).add(scout)
+
+    duplicate_claims = 0
+    for did, scouts in driver_scout_map.items():
+        if len(scouts) > 1:
+            for l in preview_lines:
+                if l.get("matched_driver_id") == did:
+                    l["match_status"] = "manual_review"
+                    l["match_confidence"] = None
+                    existing_reason = l.get("match_reason", "")
+                    if "duplicate_claim_same_driver_different_scout" not in existing_reason:
+                        l["match_reason"] = (existing_reason + " | duplicate_claim_same_driver_different_scout").strip(" |")
+                    l["review_status"] = "manual_review"
+                    duplicate_claims += 1
+            manual_review += duplicate_claims
+            match_medium -= sum(1 for l in preview_lines if l.get("matched_driver_id") == did and l.get("match_confidence") is None)
+
     return {
         "total_rows": total,
         "lines": preview_lines,
@@ -245,6 +268,7 @@ def preview_observed_affiliations(
             "official_missing": official_missing,
             "errors": error_count,
             "valid": total - error_count,
+            "duplicate_claims": duplicate_claims,
         },
     }
 
@@ -257,10 +281,35 @@ def apply_observed_affiliations(
     """
     Aplica carga de atribuciones observadas.
     Guarda cada fila en scout_liq_observed_affiliations.
+    Detecta duplicate claims: mismo driver_id reclamado por diferentes scouts.
     """
+    saved_rows = []  # in-memory tracking for batch dedup
     saved = []
     errors = []
     duplicates = 0
+    duplicate_claims = 0
+
+    # Pre-scan for duplicate claims: same matched_driver_id with different scout
+    row_matches = []
+    for i, row in enumerate(rows):
+        line_num = i + 2
+        licencia = (row.get("licencia") or "").strip()
+        telefono = (row.get("telefono") or "").strip()
+        driver_name = (row.get("nombre_driver") or "").strip()
+        match_result = _match_driver(db, licencia, telefono, driver_name)
+        row_matches.append({
+            "line_num": line_num,
+            "scout": (row.get("scout") or "").strip(),
+            "matched_driver_id": match_result["matched_driver_id"],
+        })
+
+    # Find drivers claimed by multiple scouts
+    driver_scout_map: Dict[str, set] = {}
+    for rm in row_matches:
+        did = rm["matched_driver_id"]
+        if did:
+            driver_scout_map.setdefault(did, set()).add(rm["scout"])
+    conflicting_drivers = {did for did, scouts in driver_scout_map.items() if len(scouts) > 1}
 
     for i, row in enumerate(rows):
         line_num = i + 2
@@ -290,6 +339,17 @@ def apply_observed_affiliations(
         norm_license = normalize_license(licencia)
         norm_phone = normalize_phone(telefono)
 
+        # Check in-memory batch duplicates first (same license + date + scout)
+        already_in_batch = any(
+            sr["norm_license"] == norm_license
+            and sr["fecha"] == fecha_parsed
+            and sr["scout"] == scout
+            for sr in saved_rows
+        )
+        if already_in_batch:
+            duplicates += 1
+            continue
+
         existing = db.query(ObservedAffiliation).filter(
             ObservedAffiliation.normalized_license == norm_license,
             ObservedAffiliation.reported_affiliation_date == fecha_parsed,
@@ -299,6 +359,20 @@ def apply_observed_affiliations(
         if existing:
             duplicates += 1
             continue
+
+        is_duplicate_claim = match_result["matched_driver_id"] in conflicting_drivers
+
+        if is_duplicate_claim:
+            final_match_status = "manual_review"
+            final_match_confidence = None
+            final_match_reason = (match_result.get("match_reason", "") + " | duplicate_claim_same_driver_different_scout").strip(" |")
+            final_review_status = "manual_review"
+            duplicate_claims += 1
+        else:
+            final_match_status = match_result["match_status"]
+            final_match_confidence = match_result["match_confidence"]
+            final_match_reason = match_result["match_reason"]
+            final_review_status = "observed_pending_review"
 
         oa = ObservedAffiliation(
             source_file_id=source_file_id,
@@ -313,25 +387,27 @@ def apply_observed_affiliations(
             normalized_license=norm_license,
             normalized_phone=norm_phone,
             matched_driver_id=match_result["matched_driver_id"],
-            match_status=match_result["match_status"],
-            match_confidence=match_result["match_confidence"],
-            match_reason=match_result["match_reason"],
+            match_status=final_match_status,
+            match_confidence=final_match_confidence,
+            match_reason=final_match_reason,
             official_source_status=official_status,
-            review_status=(
-                "observed_pending_review"
-                if match_result["match_status"] in ("unmatched", "manual_review")
-                else "observed_pending_review"
-            ),
+            review_status=final_review_status,
             raw_payload=json.dumps(row, default=str),
         )
         db.add(oa)
         saved.append(oa)
+        saved_rows.append({
+            "norm_license": norm_license,
+            "fecha": fecha_parsed,
+            "scout": scout,
+        })
 
     db.commit()
 
     return {
         "saved": len(saved),
         "duplicates": duplicates,
+        "duplicate_claims": duplicate_claims,
         "errors": len(errors),
         "error_details": errors,
     }

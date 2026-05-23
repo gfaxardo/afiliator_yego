@@ -18,6 +18,9 @@ from app.services.attribution_reconciliation_service import (
     get_operational_gaps_diagnostic,
 )
 from app.services.normalization_service import normalize_license, normalize_phone
+from app.services.observed_affiliation_service import (
+    preview_observed_affiliations, apply_observed_affiliations,
+)
 from datetime import datetime, date, timedelta
 
 
@@ -559,6 +562,140 @@ class TestReconciliationMVRefresh:
             assert True
         except Exception as e:
             assert False, f'MV refresh failed: {e}'
+        finally:
+            db.close()
+
+
+class TestObservedDuplicateClaims:
+    """QA Hardening: Duplicate claim detection en observed affiliations."""
+
+    def test_preview_duplicate_claim_same_driver_different_scout(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 0"
+            )).first()
+            rows = [
+                {"fecha_afiliacion": "2026-05-20", "origen": "cabinet", "scout": "Scout A", "supervisor": "Sup X", "nombre_driver": "Driver Dup", "licencia": real[0], "telefono": real[1]},
+                {"fecha_afiliacion": "2026-05-20", "origen": "cabinet", "scout": "Scout B", "supervisor": "Sup Y", "nombre_driver": "Driver Dup", "licencia": real[0], "telefono": real[1]},
+            ]
+            prev = preview_observed_affiliations(db, rows)
+            assert prev["summary"]["duplicate_claims"] >= 2
+            for l in prev["lines"]:
+                assert l["match_status"] == "manual_review"
+                assert "duplicate_claim_same_driver_different_scout" in (l.get("match_reason") or "")
+        finally:
+            db.close()
+
+    def test_apply_duplicate_claim_saved_as_manual_review(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 1"
+            )).first()
+            rows = [
+                {"fecha_afiliacion": "2026-05-20", "origen": "cabinet", "scout": "Scout A", "supervisor": "Sup X", "nombre_driver": "Driver Dup2", "licencia": real[0], "telefono": real[1]},
+                {"fecha_afiliacion": "2026-05-20", "origen": "cabinet", "scout": "Scout B", "supervisor": "Sup Y", "nombre_driver": "Driver Dup2", "licencia": real[0], "telefono": real[1]},
+            ]
+            result = apply_observed_affiliations(db, rows, source_file_id=995)
+            assert result["saved"] == 2
+            assert result["duplicate_claims"] == 2
+
+            saved = db.query(ObservedAffiliation).filter(
+                ObservedAffiliation.source_file_id == 995
+            ).all()
+            assert len(saved) == 2
+            for oa in saved:
+                assert oa.match_status == "manual_review"
+                assert oa.review_status == "manual_review"
+                assert "duplicate_claim_same_driver_different_scout" in (oa.match_reason or "")
+
+            db.query(ObservedAffiliation).filter(
+                ObservedAffiliation.source_file_id == 995
+            ).delete()
+            db.commit()
+        finally:
+            db.close()
+
+    def test_apply_same_driver_same_scout_same_date_not_duplicated(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 5"
+            )).first()
+            rows = [
+                {"fecha_afiliacion": "2026-05-20", "origen": "cabinet", "scout": "Scout U", "supervisor": "Sup Z", "nombre_driver": "Same", "licencia": real[0], "telefono": real[1]},
+                {"fecha_afiliacion": "2026-05-20", "origen": "cabinet", "scout": "Scout U", "supervisor": "Sup Z", "nombre_driver": "Same", "licencia": real[0], "telefono": real[1]},
+            ]
+            result = apply_observed_affiliations(db, rows, source_file_id=996)
+            assert result["saved"] == 1, f"Expected 1 saved, got saved={result['saved']} dup={result['duplicates']}"
+            assert result["duplicates"] == 1, f"Expected 1 duplicate, got {result['duplicates']}"
+            assert result["duplicate_claims"] == 0
+
+            saved = db.query(ObservedAffiliation).filter(
+                ObservedAffiliation.source_file_id == 996
+            ).all()
+            assert len(saved) == 1
+
+            db.query(ObservedAffiliation).filter(
+                ObservedAffiliation.source_file_id == 996
+            ).delete()
+            db.commit()
+        finally:
+            db.close()
+
+    def test_apply_summary_counts_duplicate_claims(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 6"
+            )).first()
+            rows = [
+                {"fecha_afiliacion": "2026-05-21", "origen": "cabinet", "scout": "Scout X", "supervisor": "Sup X", "nombre_driver": "D1", "licencia": real[0], "telefono": real[1]},
+                {"fecha_afiliacion": "2026-05-21", "origen": "cabinet", "scout": "Scout Y", "supervisor": "Sup Y", "nombre_driver": "D2", "licencia": real[0], "telefono": real[1]},
+                {"fecha_afiliacion": "2026-05-22", "origen": "fleet", "scout": "Scout Z", "supervisor": "Sup Z", "nombre_driver": "D3", "licencia": "FAKE999", "telefono": "000000000"},
+            ]
+            result = apply_observed_affiliations(db, rows, source_file_id=997)
+            assert result["saved"] == 3
+            assert result["duplicate_claims"] == 2  # only the first two share driver
+
+            db.query(ObservedAffiliation).filter(
+                ObservedAffiliation.source_file_id == 997
+            ).delete()
+            db.commit()
+        finally:
+            db.close()
+
+    def test_queue_shows_duplicate_claim_as_conflict(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            # Clean any prior test residue first
+            for sid in [995, 996, 997, 998, 999]:
+                db.execute(text("DELETE FROM scout_liq_reconciliation_audit WHERE observed_affiliation_id IN (SELECT id FROM scout_liq_observed_affiliations WHERE source_file_id=:sid)"), {"sid": sid})
+                db.execute(text("DELETE FROM scout_liq_observed_affiliations WHERE source_file_id=:sid"), {"sid": sid})
+            db.commit()
+
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 7"
+            )).first()
+            rows = [
+                {"fecha_afiliacion": "2026-05-23", "origen": "cabinet", "scout": "Scout P2", "supervisor": "Sup P", "nombre_driver": "DQ2", "licencia": real[0], "telefono": real[1]},
+                {"fecha_afiliacion": "2026-05-23", "origen": "cabinet", "scout": "Scout Q2", "supervisor": "Sup Q", "nombre_driver": "DQ2", "licencia": real[0], "telefono": real[1]},
+            ]
+            result = apply_observed_affiliations(db, rows, source_file_id=998)
+            assert result["duplicate_claims"] == 2, f"Expected 2, got {result} (lic={real[0]})"
+
+            queue = get_reconciliation_list(db, review_status="manual_review", limit=50, offset=0)
+            found = [item for item in queue["items"] if "duplicate_claim" in (item.get("match_reason") or "")]
+            assert len(found) > 0, f"No dup claim in queue. Items: {[(i.get('match_reason','')[:50], i.get('review_status')) for i in queue['items']]}"
+
+            db.execute(text("DELETE FROM scout_liq_observed_affiliations WHERE source_file_id=998"),)
+            db.commit()
         finally:
             db.close()
 

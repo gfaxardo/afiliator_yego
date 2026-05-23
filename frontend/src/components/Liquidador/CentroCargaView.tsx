@@ -1396,6 +1396,18 @@ function ObservedLoadPanel({
             </div>
           </div>
 
+          {/* Duplicate Claims Warning */}
+          {preview.summary.duplicate_claims > 0 && (
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+              <p className="text-xs text-orange-800 font-semibold">
+                Duplicate Claims detectados: {preview.summary.duplicate_claims}
+              </p>
+              <p className="text-[10px] text-orange-600 mt-1">
+                Mismo conductor reclamado por diferentes scouts. Se guardaran con estado manual_review y NO seran pagables automaticamente.
+              </p>
+            </div>
+          )}
+
           {/* Apply + Actions */}
           <div className="flex gap-2">
             <button
@@ -1463,6 +1475,7 @@ function ObservedLoadPanel({
           <p className="text-xs font-medium">
             {applyResult.saved > 0 ? `Guardado: ${applyResult.saved} atribuciones` : ''}
             {applyResult.duplicates > 0 ? `, ${applyResult.duplicates} duplicados` : ''}
+            {applyResult.duplicate_claims > 0 ? `, ${applyResult.duplicate_claims} conflictos de atribucion` : ''}
             {applyResult.errors > 0 ? `, ${applyResult.errors} errores` : ''}
           </p>
           {applyResult.error_details?.length > 0 && (

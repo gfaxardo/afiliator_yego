@@ -565,9 +565,8 @@ def get_reconciliation_list(
 
     if confidence and confidence != "all":
         q = q.filter(ObservedAffiliation.match_confidence == confidence)
-    elif confidence == "all":
-        pass
-    else:
+    elif not review_status:
+        # Default: only pending_review and validated unless a specific review_status is requested
         q = q.filter(
             ObservedAffiliation.review_status.in_([
                 "observed_pending_review",

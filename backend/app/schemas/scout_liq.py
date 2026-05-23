@@ -881,6 +881,7 @@ class ObservedAffiliationSummary(BaseModel):
     official_missing: int = 0
     errors: int = 0
     valid: int = 0
+    duplicate_claims: int = 0
 
 
 class ObservedAffiliationPreviewResponse(BaseModel):
@@ -893,6 +894,7 @@ class ObservedAffiliationPreviewResponse(BaseModel):
 class ObservedAffiliationApplyResponse(BaseModel):
     saved: int = 0
     duplicates: int = 0
+    duplicate_claims: int = 0
     errors: int = 0
     error_details: List[Any] = []
 

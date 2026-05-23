@@ -352,6 +352,7 @@ export interface ObservedPreviewSummary {
   official_missing: number
   errors: number
   valid: number
+  duplicate_claims: number
 }
 
 export interface ObservedPreviewResponse {
@@ -364,6 +365,7 @@ export interface ObservedPreviewResponse {
 export interface ObservedApplyResponse {
   saved: number
   duplicates: number
+  duplicate_claims: number
   errors: number
   error_details: { row: number; error: string }[]
 }
