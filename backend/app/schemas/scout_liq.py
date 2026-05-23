@@ -987,7 +987,6 @@ class ReconciliationListResponse(BaseModel):
 
 
 class ReconciliationActionRequest(BaseModel):
-    actor: Optional[str] = None
     reason: Optional[str] = None
     assign_scout: bool = False
 
@@ -1081,3 +1080,30 @@ class IntegrityMetricsResponse(BaseModel):
     total_observed: int = 0
     total_validated: int = 0
     total_rejected: int = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RECONCILIATION FRESHNESS & GAPS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ReconciliationFreshnessResponse(BaseModel):
+    last_refreshed_at: Optional[str] = None
+    age_minutes: Optional[float] = None
+    status: str = "unknown"
+    last_error: Optional[str] = None
+    row_count: Optional[int] = None
+    refresh_duration_ms: Optional[int] = None
+
+
+class OperationalGapsDiagnosticBreakdown(BaseModel):
+    label: str = ""
+    count: int = 0
+    description: str = ""
+
+
+class OperationalGapsDiagnosticResponse(BaseModel):
+    total_operational_gaps: int = 0
+    total_source_drivers: int = 0
+    gap_rate_pct: float = 0.0
+    note: str = "Este numero requiere diagnostico por ventana/origen antes de interpretarse como perdida real."
+    breakdown: List[OperationalGapsDiagnosticBreakdown] = []

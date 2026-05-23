@@ -14,6 +14,8 @@ from app.services.attribution_reconciliation_service import (
     get_reconciliation_summary, get_reconciliation_list,
     get_driver_timeline, get_integrity_metrics,
     refresh_reconciliation_view,
+    get_reconciliation_freshness,
+    get_operational_gaps_diagnostic,
 )
 from app.services.normalization_service import normalize_license, normalize_phone
 from datetime import datetime, date, timedelta
@@ -293,7 +295,7 @@ class TestReconciliationApproveReject:
         db = SessionLocal()
         try:
             oa = _create_observed(db)
-            result = approve_reconciliation(db, oa.id, actor='qa_tester', reason='QA approved')
+            result = approve_reconciliation(db, oa.id, "qa_tester", "QA approved")
             assert result['action'] == 'approved'
             
             # Verify audit trail
@@ -302,7 +304,7 @@ class TestReconciliationApproveReject:
                 ReconciliationAudit.action == 'approve',
             ).first()
             assert audit is not None
-            assert audit.actor == 'qa_tester'
+            assert audit.actor == 'system_operator'
             
             # Cleanup
             db.delete(audit)
@@ -315,7 +317,7 @@ class TestReconciliationApproveReject:
         db = SessionLocal()
         try:
             oa = _create_observed(db)
-            result = reject_reconciliation(db, oa.id, actor='qa_tester', reason='QA rejected')
+            result = reject_reconciliation(db, oa.id, "qa_tester", "QA rejected")
             assert result['action'] == 'rejected'
             db.refresh(oa)
             assert oa.review_status == 'observed_rejected'
@@ -402,6 +404,147 @@ class TestReconciliationDriverTimeline:
             assert 'audit_trail' in timeline
             db.delete(oa)
             db.commit()
+        finally:
+            db.close()
+
+
+class TestReconciliationActorHardened:
+    """QA Hardening: Actor del audit trail NO depende del frontend."""
+
+    def test_approve_uses_system_operator(self):
+        db = SessionLocal()
+        try:
+            oa = _create_observed(db)
+            result = approve_reconciliation(db, oa.id, "qa_tester", "QA actor test")
+            assert result['action'] == 'approved'
+
+            audit = db.query(ReconciliationAudit).filter(
+                ReconciliationAudit.observed_affiliation_id == oa.id,
+                ReconciliationAudit.action == 'approve',
+            ).first()
+            assert audit is not None
+            assert audit.actor == "system_operator", f"Expected system_operator, got {audit.actor}"
+
+            db.delete(audit)
+            db.delete(oa)
+            db.commit()
+        finally:
+            db.close()
+
+    def test_reject_uses_system_operator(self):
+        db = SessionLocal()
+        try:
+            oa = _create_observed(db)
+            result = reject_reconciliation(db, oa.id, "hacker", "QA reject test")
+            assert result['action'] == 'rejected'
+
+            audit = db.query(ReconciliationAudit).filter(
+                ReconciliationAudit.observed_affiliation_id == oa.id,
+                ReconciliationAudit.action == 'reject',
+            ).first()
+            assert audit is not None
+            assert audit.actor == "system_operator", f"Expected system_operator, got {audit.actor}"
+
+            db.delete(audit)
+            db.delete(oa)
+            db.commit()
+        finally:
+            db.close()
+
+    def test_merge_uses_system_operator(self):
+        db = SessionLocal()
+        try:
+            oa = _create_observed(
+                db,
+                matched_driver_id='qa_test_merge_actor_001',
+                official_source_status='official_missing',
+            )
+            result = merge_observed_to_official(db, oa.id, False, "impersonator")
+            if result.get('action') == 'merged':
+                audit = db.query(ReconciliationAudit).filter(
+                    ReconciliationAudit.observed_affiliation_id == oa.id,
+                    ReconciliationAudit.action == 'merge',
+                ).first()
+                if audit:
+                    assert audit.actor == "system_operator", f"Expected system_operator, got {audit.actor}"
+                    db.delete(audit)
+
+            db.delete(oa)
+            db.commit()
+        finally:
+            db.close()
+
+
+class TestReconciliationRefreshLog:
+    """QA Hardening: MV refresh logging & freshness."""
+
+    def test_refresh_log_success(self):
+        db = SessionLocal()
+        try:
+            result = refresh_reconciliation_view(db)
+            assert result.get('status') == 'ok'
+            assert 'duration_ms' in result
+            assert 'row_count' in result
+
+            from app.models.scout_liq import ReconciliationRefreshLog
+            log = db.query(ReconciliationRefreshLog).order_by(
+                ReconciliationRefreshLog.id.desc()
+            ).first()
+            assert log is not None
+            assert log.refresh_status == 'ok'
+            assert log.refresh_duration_ms is not None
+        except Exception as e:
+            assert False, f'Refresh log test failed: {e}'
+        finally:
+            db.close()
+
+    def test_freshness_returns_all_keys(self):
+        db = SessionLocal()
+        try:
+            f = get_reconciliation_freshness(db)
+            required = ['last_refreshed_at', 'age_minutes', 'status', 'last_error', 'row_count']
+            for k in required:
+                assert k in f, f'Missing freshness key: {k}'
+            assert f['status'] in ('fresh', 'stale', 'stale_critical', 'never_refreshed', 'error')
+        finally:
+            db.close()
+
+    def test_freshness_status_detects_refreshed(self):
+        db = SessionLocal()
+        try:
+            refresh_reconciliation_view(db)
+            f = get_reconciliation_freshness(db)
+            assert f['status'] in ('fresh', 'stale', 'stale_critical')
+            assert f['last_refreshed_at'] is not None
+        except Exception as e:
+            assert False, f'Freshness test failed: {e}'
+        finally:
+            db.close()
+
+
+class TestOperationalGapsDiagnostic:
+    """QA Hardening: Diagnostico segmentado de operational gaps."""
+
+    def test_diagnostic_returns_breakdown(self):
+        db = SessionLocal()
+        try:
+            diag = get_operational_gaps_diagnostic(db)
+            assert 'total_operational_gaps' in diag
+            assert 'total_source_drivers' in diag
+            assert 'gap_rate_pct' in diag
+            assert 'note' in diag
+            assert 'breakdown' in diag
+            assert isinstance(diag['breakdown'], list)
+            assert 'Este numero requiere diagnostico' in diag['note']
+        finally:
+            db.close()
+
+    def test_diagnostic_rate_is_reasonable(self):
+        db = SessionLocal()
+        try:
+            diag = get_operational_gaps_diagnostic(db)
+            assert 0 <= diag['gap_rate_pct'] <= 100, f'Gap rate out of range: {diag["gap_rate_pct"]}'
+            assert diag['total_operational_gaps'] <= diag['total_source_drivers']
         finally:
             db.close()
 

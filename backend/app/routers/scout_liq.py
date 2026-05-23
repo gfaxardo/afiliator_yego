@@ -153,6 +153,8 @@ from app.services.attribution_reconciliation_service import (
     detect_conflicts,
     get_integrity_metrics,
     refresh_reconciliation_view,
+    get_reconciliation_freshness,
+    get_operational_gaps_diagnostic,
 )
 from app.services.scout_liq_health_service import (
     get_health_summary,
@@ -236,6 +238,8 @@ from app.schemas.scout_liq import (
     AutoDetectResponse,
     ConflictItem,
     IntegrityMetricsResponse,
+    ReconciliationFreshnessResponse,
+    OperationalGapsDiagnosticResponse,
 )
 
 router = APIRouter(prefix="/scout-liq", tags=["scout-liq"])
@@ -3584,9 +3588,12 @@ def rec_auto_detect(db: Session = Depends(get_db)):
 
 @router.post("/reconciliation/refresh-view")
 def rec_refresh(db: Session = Depends(get_db)):
-    """Refresca la vista materializada de reconciliacion."""
-    refresh_reconciliation_view(db)
-    return {"status": "ok", "message": "Vista materializada refrescada"}
+    """Refresca la vista materializada de reconciliacion con registro de auditoria."""
+    try:
+        result = refresh_reconciliation_view(db)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al refrescar MV: {str(e)}")
 
 
 @router.post("/reconciliation/{observed_id}/approve", response_model=ReconciliationActionResult)
@@ -3595,8 +3602,8 @@ def rec_approve(
     body: ReconciliationActionRequest,
     db: Session = Depends(get_db),
 ):
-    """Aprueba una observacion para pago."""
-    result = approve_reconciliation(db, observed_id, body.actor, body.reason)
+    """Aprueba una observacion para pago. Actor fijado como system_operator."""
+    result = approve_reconciliation(db, observed_id, "system_operator", body.reason)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -3608,8 +3615,8 @@ def rec_reject(
     body: ReconciliationActionRequest,
     db: Session = Depends(get_db),
 ):
-    """Rechaza una observacion."""
-    result = reject_reconciliation(db, observed_id, body.actor, body.reason)
+    """Rechaza una observacion. Actor fijado como system_operator."""
+    result = reject_reconciliation(db, observed_id, "system_operator", body.reason)
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -3621,8 +3628,8 @@ def rec_merge(
     body: ReconciliationActionRequest,
     db: Session = Depends(get_db),
 ):
-    """Merge: convierte observado en atribucion oficial."""
-    result = merge_observed_to_official(db, observed_id, body.assign_scout, body.actor)
+    """Merge: convierte observado en atribucion oficial. Actor fijado como system_operator."""
+    result = merge_observed_to_official(db, observed_id, body.assign_scout, "system_operator")
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
@@ -3641,3 +3648,16 @@ def rec_driver_timeline(
 def rec_conflicts(db: Session = Depends(get_db)):
     """Lista conflictos activos de atribucion."""
     return detect_conflicts(db)
+
+
+@router.get("/reconciliation/freshness", response_model=ReconciliationFreshnessResponse)
+def rec_freshness(db: Session = Depends(get_db)):
+    """Estado de frescura de la vista materializada de reconciliacion."""
+    return get_reconciliation_freshness(db)
+
+
+@router.get("/reconciliation/operational-gaps/diagnostic", response_model=OperationalGapsDiagnosticResponse)
+def rec_operational_gaps_diagnostic(db: Session = Depends(get_db)):
+    """Diagnostico segmentado de los operational_without_attribution gaps."""
+    return get_operational_gaps_diagnostic(db)
+

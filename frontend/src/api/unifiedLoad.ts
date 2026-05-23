@@ -560,6 +560,29 @@ export interface IntegrityMetrics {
   total_rejected: number
 }
 
+export interface ReconciliationFreshness {
+  last_refreshed_at: string | null
+  age_minutes: number | null
+  status: 'fresh' | 'stale' | 'stale_critical' | 'never_refreshed' | 'error'
+  last_error: string | null
+  row_count: number | null
+  refresh_duration_ms: number | null
+}
+
+export interface OperationalGapsBreakdown {
+  label: string
+  count: number
+  description: string
+}
+
+export interface OperationalGapsDiagnostic {
+  total_operational_gaps: number
+  total_source_drivers: number
+  gap_rate_pct: number
+  note: string
+  breakdown: OperationalGapsBreakdown[]
+}
+
 const apiRec = axios.create({ baseURL: API_BASE, timeout: 60000 })
 
 export async function getReconciliationSummary(): Promise<ReconciliationSummary> {
@@ -586,23 +609,33 @@ export async function autoDetectReconciliations(): Promise<AutoDetectItem[]> {
   return res.data
 }
 
-export async function refreshReconciliationView(): Promise<any> {
+export async function refreshReconciliationView(): Promise<{ status: string; duration_ms: number; row_count: number }> {
   const res = await apiRec.post('/reconciliation/refresh-view')
   return res.data
 }
 
-export async function approveReconciliation(id: number, actor?: string, reason?: string): Promise<ReconciliationActionResult> {
-  const res = await apiRec.post(`/reconciliation/${id}/approve`, { actor, reason })
+export async function getReconciliationFreshness(): Promise<ReconciliationFreshness> {
+  const res = await apiRec.get('/reconciliation/freshness')
   return res.data
 }
 
-export async function rejectReconciliation(id: number, actor?: string, reason?: string): Promise<ReconciliationActionResult> {
-  const res = await apiRec.post(`/reconciliation/${id}/reject`, { actor, reason })
+export async function getOperationalGapsDiagnostic(): Promise<OperationalGapsDiagnostic> {
+  const res = await apiRec.get('/reconciliation/operational-gaps/diagnostic')
   return res.data
 }
 
-export async function mergeReconciliation(id: number, assign_scout?: boolean, actor?: string): Promise<ReconciliationActionResult> {
-  const res = await apiRec.post(`/reconciliation/${id}/merge`, { assign_scout, actor })
+export async function approveReconciliation(id: number, reason?: string): Promise<ReconciliationActionResult> {
+  const res = await apiRec.post(`/reconciliation/${id}/approve`, { reason })
+  return res.data
+}
+
+export async function rejectReconciliation(id: number, reason?: string): Promise<ReconciliationActionResult> {
+  const res = await apiRec.post(`/reconciliation/${id}/reject`, { reason })
+  return res.data
+}
+
+export async function mergeReconciliation(id: number, assign_scout?: boolean): Promise<ReconciliationActionResult> {
+  const res = await apiRec.post(`/reconciliation/${id}/merge`, { assign_scout })
   return res.data
 }
 

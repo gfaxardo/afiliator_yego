@@ -8,6 +8,8 @@ Detecta gaps de data, conflictos, y crea cola operacional de revision.
 import csv as _csv
 import io
 import json
+import time
+import logging
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional, Any
 
@@ -17,7 +19,10 @@ from sqlalchemy import text
 from app.models.scout_liq import (
     ObservedAffiliation, ReconciliationAudit, CutoffDriverLine,
     DriverAssignment, PaidHistory, Scout,
+    ReconciliationRefreshLog,
 )
+
+_logger = logging.getLogger("attribution_reconciliation")
 
 
 def classify_driver(
@@ -201,7 +206,7 @@ def reconcile_observed_vs_official(
 
     oa.official_source_status = "official_found"
     oa.review_status = "observed_validated"
-    oa.review_notes = (oa.review_notes or "") + f"\n[Reconciled] Driver now in official source. Actor: {actor or 'system'}"
+    oa.review_notes = (oa.review_notes or "") + f"\n[Reconciled] Driver now in official source. Actor: system_operator"
     oa.updated_at = datetime.now()
 
     after_state = {
@@ -216,7 +221,7 @@ def reconcile_observed_vs_official(
         action="reconcile_observed_to_official",
         before_state=json.dumps(before_state),
         after_state=json.dumps(after_state),
-        actor=actor or "system",
+        actor="system_operator",
         reason="Driver detected in official source after being observed-only",
         reconciliation_status="done",
     )
@@ -257,7 +262,7 @@ def approve_reconciliation(
     before_state = {"review_status": oa.review_status}
 
     oa.review_status = "observed_validated"
-    oa.review_notes = (oa.review_notes or "") + f"\n[Approved] {reason or 'Approved by ' + (actor or 'system')}"
+    oa.review_notes = (oa.review_notes or "") + f"\n[Approved] {reason or 'Approved by system_operator'}"
     oa.updated_at = datetime.now()
 
     after_state = {"review_status": oa.review_status}
@@ -268,7 +273,7 @@ def approve_reconciliation(
         action="approve",
         before_state=json.dumps(before_state),
         after_state=json.dumps(after_state),
-        actor=actor or "system",
+        actor="system_operator",
         reason=reason,
         reconciliation_status="done",
     )
@@ -299,7 +304,7 @@ def reject_reconciliation(
     before_state = {"review_status": oa.review_status}
 
     oa.review_status = "observed_rejected"
-    oa.review_notes = (oa.review_notes or "") + f"\n[Rejected] {reason or 'Rejected by ' + (actor or 'system')}"
+    oa.review_notes = (oa.review_notes or "") + f"\n[Rejected] {reason or 'Rejected by system_operator'}"
     oa.updated_at = datetime.now()
 
     after_state = {"review_status": oa.review_status}
@@ -310,7 +315,7 @@ def reject_reconciliation(
         action="reject",
         before_state=json.dumps(before_state),
         after_state=json.dumps(after_state),
-        actor=actor or "system",
+        actor="system_operator",
         reason=reason,
         reconciliation_status="done",
     )
@@ -380,7 +385,7 @@ def merge_observed_to_official(
     else:
         oa.review_status = "observed_validated"
         oa.official_source_status = "official_found" if in_official else oa.official_source_status
-        oa.review_notes = (oa.review_notes or "") + f"\n[Merge] Merge completado. Actor: {actor or 'system'}"
+        oa.review_notes = (oa.review_notes or "") + f"\n[Merge] Merge completado. Actor: system_operator"
         assignment_created = False
 
         if assign_scout and oa.matched_driver_id and oa.reported_scout_name:
@@ -399,7 +404,7 @@ def merge_observed_to_official(
                         origin=oa.reported_origin or "observed_merge",
                         license_raw=oa.reported_license,
                         status="active",
-                        assigned_by=actor or "system",
+                        assigned_by="system_operator",
                     )
                     db.add(da)
                     assignment_created = True
@@ -418,7 +423,7 @@ def merge_observed_to_official(
         action="merge",
         before_state=json.dumps(before_state),
         after_state=json.dumps(after_state),
-        actor=actor or "system",
+        actor="system_operator",
         reason="Merge observed to official attribution",
         reconciliation_status="done",
     )
@@ -756,12 +761,41 @@ def get_driver_timeline(db: Session, driver_id: str) -> Dict[str, Any]:
 
 
 def refresh_reconciliation_view(db: Session):
-    """Refresca la vista materializada de reconciliacion."""
+    """Refresca la vista materializada de reconciliacion con registro de auditoria."""
+    log = ReconciliationRefreshLog()
+    db.add(log)
+    db.flush()
+    log_id = log.id
+
+    start = time.time()
     try:
         db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY scout_liq_attribution_reconciliation"))
     except Exception:
-        db.execute(text("REFRESH MATERIALIZED VIEW scout_liq_attribution_reconciliation"))
+        try:
+            db.execute(text("REFRESH MATERIALIZED VIEW scout_liq_attribution_reconciliation"))
+        except Exception as e:
+            elapsed_ms = int((time.time() - start) * 1000)
+            log = db.query(ReconciliationRefreshLog).filter(ReconciliationRefreshLog.id == log_id).first()
+            if log:
+                log.refresh_status = "error"
+                log.refresh_error = str(e)[:500]
+                log.refresh_duration_ms = elapsed_ms
+            db.commit()
+            _logger.error(f"Reconciliation MV refresh failed: {e}")
+            raise
+
+    elapsed_ms = int((time.time() - start) * 1000)
+    row_count = db.execute(text("SELECT COUNT(*) FROM scout_liq_attribution_reconciliation")).scalar()
+
+    log = db.query(ReconciliationRefreshLog).filter(ReconciliationRefreshLog.id == log_id).first()
+    if log:
+        log.refresh_status = "ok"
+        log.refresh_duration_ms = elapsed_ms
+        log.row_count = row_count
+        log.last_refreshed_at = datetime.now()
     db.commit()
+
+    return {"status": "ok", "duration_ms": elapsed_ms, "row_count": row_count}
 
 
 def get_integrity_metrics(db: Session) -> Dict[str, Any]:
@@ -790,4 +824,109 @@ def get_integrity_metrics(db: Session) -> Dict[str, Any]:
         "total_observed": total,
         "total_validated": summary["total_validated"],
         "total_rejected": summary["total_rejected"],
+    }
+
+
+def get_reconciliation_freshness(db: Session) -> Dict[str, Any]:
+    """Estado de frescura de la vista materializada de reconciliacion."""
+    log = db.query(ReconciliationRefreshLog).order_by(
+        ReconciliationRefreshLog.id.desc()
+    ).first()
+
+    if not log or not log.last_refreshed_at:
+        return {
+            "last_refreshed_at": None,
+            "age_minutes": None,
+            "status": "never_refreshed",
+            "last_error": None,
+            "row_count": None,
+            "refresh_duration_ms": None,
+        }
+
+    age = (datetime.now() - log.last_refreshed_at).total_seconds() / 60.0
+    status = "fresh"
+    if age > 60:
+        status = "stale"
+    if age > 1440:
+        status = "stale_critical"
+    if log.refresh_status == "error":
+        status = "error"
+
+    return {
+        "last_refreshed_at": str(log.last_refreshed_at),
+        "age_minutes": round(age, 1),
+        "status": status,
+        "last_error": log.refresh_error,
+        "row_count": log.row_count,
+        "refresh_duration_ms": log.refresh_duration_ms,
+    }
+
+
+def get_operational_gaps_diagnostic(db: Session) -> Dict[str, Any]:
+    """Diagnostico segmentado de los operational_without_attribution gaps."""
+    total_source = db.execute(
+        text("SELECT COUNT(*) FROM module_ct_cabinet_drivers")
+    ).scalar() or 0
+
+    total_observed = db.query(ObservedAffiliation).count()
+    official_found = db.query(ObservedAffiliation).filter(
+        ObservedAffiliation.official_source_status == "official_found"
+    ).count()
+
+    total_gaps = total_source - official_found if total_source > official_found else 0
+
+    gaps_driver_ids = "(SELECT o.matched_driver_id FROM scout_liq_observed_affiliations o WHERE o.official_source_status = 'official_found' AND o.matched_driver_id IS NOT NULL)"
+
+    breakdown = []
+
+    with_assignment = db.execute(text(f"""
+        SELECT COUNT(*)
+        FROM module_ct_cabinet_drivers m
+        INNER JOIN scout_liq_driver_assignments a ON a.driver_id = m.driver_id AND a.status = 'active'
+        WHERE m.driver_id NOT IN {gaps_driver_ids}
+    """)).scalar() or 0
+    breakdown.append({
+        "label": "drivers_asignados_gap",
+        "count": with_assignment,
+        "description": "Drivers con asignacion activa a scout pero sin atribucion oficial observada",
+    })
+
+    without_assignment = db.execute(text(f"""
+        SELECT COUNT(*)
+        FROM module_ct_cabinet_drivers m
+        WHERE m.driver_id NOT IN {gaps_driver_ids}
+          AND NOT EXISTS (
+            SELECT 1 FROM scout_liq_driver_assignments a
+            WHERE a.driver_id = m.driver_id AND a.status = 'active'
+          )
+    """)).scalar() or 0
+    breakdown.append({
+        "label": "drivers_sin_asignacion_gap",
+        "count": without_assignment,
+        "description": "Drivers sin asignacion activa y sin atribucion observada oficial",
+    })
+
+    by_origin = db.execute(text(f"""
+        SELECT COALESCE(m.origen, 'sin_origen'), COUNT(*)
+        FROM module_ct_cabinet_drivers m
+        WHERE m.driver_id NOT IN {gaps_driver_ids}
+        GROUP BY m.origen
+        ORDER BY COUNT(*) DESC
+        LIMIT 10
+    """)).fetchall()
+    for row in by_origin:
+        breakdown.append({
+            "label": f"origen_{row[0] or 'sin_origen'}",
+            "count": row[1],
+            "description": f"Gaps segmentados por origen: {row[0] or 'sin origen'}",
+        })
+
+    gap_rate = round((total_gaps / max(total_source, 1)) * 100, 1)
+
+    return {
+        "total_operational_gaps": total_gaps,
+        "total_source_drivers": total_source,
+        "gap_rate_pct": gap_rate,
+        "note": "Este numero requiere diagnostico por ventana/origen antes de interpretarse como perdida real.",
+        "breakdown": breakdown,
     }
