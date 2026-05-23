@@ -3477,6 +3477,7 @@ def observed_affiliations_preview(
 @router.post("/observed-affiliations/apply", response_model=ObservedAffiliationApplyResponse)
 def observed_affiliations_apply(
     file: UploadFile = File(...),
+    source_file_id: Optional[int] = Query(None, description="Batch ID opcional para trazabilidad"),
     db: Session = Depends(get_db),
 ):
     """Aplica carga de atribuciones observadas."""
@@ -3488,7 +3489,7 @@ def observed_affiliations_apply(
         rows = parse_observed_xlsx(content)
     else:
         raise HTTPException(status_code=400, detail="Formato no soportado. Use CSV o XLSX.")
-    result = apply_observed_affiliations(db, rows)
+    result = apply_observed_affiliations(db, rows, source_file_id=source_file_id)
     return result
 
 
