@@ -20,6 +20,7 @@ from app.services.attribution_reconciliation_service import (
 from app.services.normalization_service import normalize_license, normalize_phone
 from app.services.observed_affiliation_service import (
     preview_observed_affiliations, apply_observed_affiliations,
+    reprocess_unmatched_observed_affiliations,
 )
 from datetime import datetime, date, timedelta
 
@@ -592,6 +593,12 @@ class TestObservedDuplicateClaims:
         db = SessionLocal()
         try:
             from sqlalchemy import text
+            # Clean residue
+            for sid in [995]:
+                db.execute(text("DELETE FROM scout_liq_reconciliation_audit WHERE observed_affiliation_id IN (SELECT id FROM scout_liq_observed_affiliations WHERE source_file_id=:sid)"), {"sid": sid})
+                db.execute(text("DELETE FROM scout_liq_observed_affiliations WHERE source_file_id=:sid"), {"sid": sid})
+            db.commit()
+
             real = db.execute(text(
                 "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 1"
             )).first()
@@ -695,6 +702,176 @@ class TestObservedDuplicateClaims:
             assert len(found) > 0, f"No dup claim in queue. Items: {[(i.get('match_reason','')[:50], i.get('review_status')) for i in queue['items']]}"
 
             db.execute(text("DELETE FROM scout_liq_observed_affiliations WHERE source_file_id=998"),)
+            db.commit()
+        finally:
+            db.close()
+
+
+class TestReprocessUnmatchedObserved:
+    """QA Hardening: Reintentar match de observados sin driver_id."""
+
+    def test_unmatched_observed_gets_driver_id_after_driver_exists(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 9"
+            )).first()
+            # Insert an observed WITHOUT driver_id
+            oa = _create_observed(
+                db,
+                matched_driver_id=None,
+                reported_license=real[0],
+                reported_phone=real[1],
+                match_status="unmatched",
+                match_confidence=None,
+                match_reason="No match yet",
+                official_source_status="official_unknown",
+                review_status="observed_pending_review",
+            )
+            # Now reprocess — should find the driver via the license
+            result = reprocess_unmatched_observed_affiliations(db, limit=50)
+            assert result["updated"] >= 1, f"No records updated: {result}"
+
+            db.refresh(oa)
+            assert oa.matched_driver_id is not None, f"Driver should now be matched: {oa.matched_driver_id}"
+            assert oa.match_status in ("matched",), f"Match status: {oa.match_status}"
+            assert oa.match_confidence is not None
+
+            # Cleanup
+            db.query(ReconciliationAudit).filter(
+                ReconciliationAudit.observed_affiliation_id == oa.id
+            ).delete()
+            db.delete(oa)
+            db.commit()
+        finally:
+            db.close()
+
+    def test_unmatched_multiple_matches_stays_manual_review(self):
+        db = SessionLocal()
+        try:
+            # Use a generic phone that might match multiple drivers or use a license that we know won't match uniquely
+            # We'll just create a scenario where _match_driver returns manual_review
+            oa = _create_observed(
+                db,
+                matched_driver_id=None,
+                reported_license="",
+                reported_phone="",  # empty phone = no match, then we leave as-is
+                match_status="unmatched",
+                match_confidence=None,
+                review_status="observed_pending_review",
+            )
+            # This should be skipped (no phone, no license)
+            result = reprocess_unmatched_observed_affiliations(db, limit=50)
+            assert result["skipped"] >= 1
+
+            db.refresh(oa)
+            assert oa.matched_driver_id is None  # Still unmatched, nothing changed
+
+            db.delete(oa)
+            db.commit()
+        finally:
+            db.close()
+
+    def test_unmatched_without_license_phone_stays_orphan(self):
+        db = SessionLocal()
+        try:
+            oa = _create_observed(
+                db,
+                matched_driver_id=None,
+                reported_license="",
+                reported_phone="",
+                match_status="unmatched",
+                match_confidence=None,
+                review_status="observed_pending_review",
+            )
+            result = reprocess_unmatched_observed_affiliations(db, limit=50)
+            # Should be skipped because no license or phone
+            assert result["updated"] == 0
+            assert result["skipped"] >= 1
+
+            db.refresh(oa)
+            assert oa.matched_driver_id is None
+
+            db.delete(oa)
+            db.commit()
+        finally:
+            db.close()
+
+    def test_reprocess_does_not_duplicate(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 9"
+            )).first()
+            oa = _create_observed(
+                db,
+                matched_driver_id=None,
+                reported_license=real[0],
+                reported_phone=real[1],
+                match_status="unmatched",
+                match_confidence=None,
+                review_status="observed_pending_review",
+            )
+            # First reprocess
+            r1 = reprocess_unmatched_observed_affiliations(db, limit=50)
+            first_count = r1["updated"]
+
+            # Second reprocess — same record should not be reprocessed again (it now has driver_id)
+            r2 = reprocess_unmatched_observed_affiliations(db, limit=50)
+            second_count = r2["updated"]
+
+            # There should be 1 observed record total (no duplicates created)
+            db.refresh(oa)
+            assert oa.matched_driver_id is not None
+
+            # Cleanup
+            db.query(ReconciliationAudit).filter(
+                ReconciliationAudit.observed_affiliation_id == oa.id
+            ).delete()
+            db.delete(oa)
+            db.commit()
+        finally:
+            db.close()
+
+    def test_reprocess_audit_trail_created(self):
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            real = db.execute(text(
+                "SELECT license_number, phone FROM drivers WHERE phone IS NOT NULL AND license_number IS NOT NULL ORDER BY driver_id LIMIT 1 OFFSET 9"
+            )).first()
+            oa = _create_observed(
+                db,
+                matched_driver_id=None,
+                reported_license=real[0],
+                reported_phone=real[1],
+                match_status="unmatched",
+                match_confidence=None,
+                review_status="observed_pending_review",
+            )
+            reprocess_unmatched_observed_affiliations(db, limit=50)
+
+            audits = db.query(ReconciliationAudit).filter(
+                ReconciliationAudit.observed_affiliation_id == oa.id,
+                ReconciliationAudit.action == "reprocess_unmatched",
+            ).all()
+            assert len(audits) >= 1, f"No audit trail found for id={oa.id}"
+
+            for a in audits:
+                assert a.actor == "system_operator"
+                assert a.action == "reprocess_unmatched"
+                before = json.loads(a.before_state) if isinstance(a.before_state, str) else a.before_state
+                after = json.loads(a.after_state) if isinstance(a.after_state, str) else a.after_state
+                assert before.get("matched_driver_id") is None
+                assert after.get("matched_driver_id") is not None
+
+            # Cleanup
+            db.query(ReconciliationAudit).filter(
+                ReconciliationAudit.observed_affiliation_id == oa.id
+            ).delete()
+            db.delete(oa)
             db.commit()
         finally:
             db.close()

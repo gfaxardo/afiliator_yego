@@ -232,28 +232,43 @@ def preview_observed_affiliations(
     official_missing = sum(1 for l in preview_lines if l["official_source_status"] == "official_missing")
     error_count = sum(1 for l in preview_lines if l["has_error"])
 
-    # Duplicate claim detection: same matched_driver_id claimed by different scouts
+    # Duplicate claim detection: same matched_driver_id OR same normalized_license
+    # claimed by different scouts within the batch
     driver_scout_map: Dict[str, set] = {}
+    license_scout_map: Dict[str, set] = {}
     for l in preview_lines:
         did = l.get("matched_driver_id")
         scout = l.get("scout")
+        nlic = l.get("normalized_license", "")
         if did:
             driver_scout_map.setdefault(did, set()).add(scout)
+        if nlic:
+            license_scout_map.setdefault(nlic, set()).add(scout)
 
     duplicate_claims = 0
+    conflicting_keys = set()
     for did, scouts in driver_scout_map.items():
         if len(scouts) > 1:
-            for l in preview_lines:
-                if l.get("matched_driver_id") == did:
-                    l["match_status"] = "manual_review"
-                    l["match_confidence"] = None
-                    existing_reason = l.get("match_reason", "")
-                    if "duplicate_claim_same_driver_different_scout" not in existing_reason:
-                        l["match_reason"] = (existing_reason + " | duplicate_claim_same_driver_different_scout").strip(" |")
-                    l["review_status"] = "manual_review"
-                    duplicate_claims += 1
-            manual_review += duplicate_claims
-            match_medium -= sum(1 for l in preview_lines if l.get("matched_driver_id") == did and l.get("match_confidence") is None)
+            conflicting_keys.add(did)
+    for nlic, scouts in license_scout_map.items():
+        if len(scouts) > 1:
+            conflicting_keys.add(nlic)
+
+    for l in preview_lines:
+        did = l.get("matched_driver_id")
+        nlic = l.get("normalized_license", "")
+        if (did and did in conflicting_keys) or (nlic and nlic in conflicting_keys):
+            if l.get("match_status") != "manual_review":
+                l["match_status"] = "manual_review"
+                l["match_confidence"] = None
+                existing_reason = l.get("match_reason", "")
+                if "duplicate_claim_same_driver_different_scout" not in existing_reason:
+                    l["match_reason"] = (existing_reason + " | duplicate_claim_same_driver_different_scout").strip(" |")
+                l["review_status"] = "manual_review"
+                duplicate_claims += 1
+                if l.get("match_confidence") == "medium":
+                    match_medium -= 1
+                manual_review += 1
 
     return {
         "total_rows": total,
@@ -289,7 +304,8 @@ def apply_observed_affiliations(
     duplicates = 0
     duplicate_claims = 0
 
-    # Pre-scan for duplicate claims: same matched_driver_id with different scout
+    # Pre-scan for duplicate claims: same matched_driver_id or same normalized_license
+    # with different scout within the batch
     row_matches = []
     for i, row in enumerate(rows):
         line_num = i + 2
@@ -301,15 +317,22 @@ def apply_observed_affiliations(
             "line_num": line_num,
             "scout": (row.get("scout") or "").strip(),
             "matched_driver_id": match_result["matched_driver_id"],
+            "normalized_license": normalize_license(licencia),
         })
 
-    # Find drivers claimed by multiple scouts
+    # Find drivers claimed by multiple scouts (by driver_id OR license)
     driver_scout_map: Dict[str, set] = {}
+    license_scout_map: Dict[str, set] = {}
     for rm in row_matches:
         did = rm["matched_driver_id"]
+        nlic = rm["normalized_license"]
         if did:
             driver_scout_map.setdefault(did, set()).add(rm["scout"])
+        if nlic:
+            license_scout_map.setdefault(nlic, set()).add(rm["scout"])
+
     conflicting_drivers = {did for did, scouts in driver_scout_map.items() if len(scouts) > 1}
+    conflicting_licenses = {nlic for nlic, scouts in license_scout_map.items() if len(scouts) > 1}
 
     for i, row in enumerate(rows):
         line_num = i + 2
@@ -360,7 +383,10 @@ def apply_observed_affiliations(
             duplicates += 1
             continue
 
-        is_duplicate_claim = match_result["matched_driver_id"] in conflicting_drivers
+        is_duplicate_claim = (
+            (match_result["matched_driver_id"] and match_result["matched_driver_id"] in conflicting_drivers)
+            or (norm_license and norm_license in conflicting_licenses)
+        )
 
         if is_duplicate_claim:
             final_match_status = "manual_review"
@@ -703,4 +729,115 @@ def update_observed_review(
         "review_status": oa.review_status,
         "review_notes": oa.review_notes,
         "updated_at": str(oa.updated_at),
+    }
+
+
+def reprocess_unmatched_observed_affiliations(
+    db: Session,
+    limit: int = 500,
+) -> Dict[str, Any]:
+    """
+    Reintenta match para observed_affiliations sin driver_id.
+    Util cuando un conductor aparece en drivers posteriormente.
+
+    Solo procesa registros con matched_driver_id IS NULL
+    y review_status IN ('observed_pending_review', 'manual_review').
+
+    Para cada registro:
+    - Reintenta _match_driver con licencia/telefono originales
+    - Si match unico: actualiza matched_driver_id, match_status, confidence, etc.
+    - Si multiples matches: deja en manual_review con razon multiple_candidates
+    - Si sin match: deja como esta
+    - Crea audit trail en ReconciliationAudit por cada cambio
+    """
+    import json as _json
+    from app.models.scout_liq import ReconciliationAudit
+
+    candidates = db.query(ObservedAffiliation).filter(
+        ObservedAffiliation.matched_driver_id.is_(None),
+        ObservedAffiliation.review_status.in_([
+            "observed_pending_review",
+            "manual_review",
+        ]),
+    ).order_by(ObservedAffiliation.id.asc()).limit(limit).all()
+
+    updated = 0
+    skipped = 0
+    manual_review_set = 0
+    errors_info = []
+
+    for oa in candidates:
+        if not oa.reported_license and not oa.reported_phone:
+            skipped += 1
+            continue
+
+        before_state = {
+            "matched_driver_id": oa.matched_driver_id,
+            "match_status": oa.match_status,
+            "match_confidence": oa.match_confidence,
+            "match_reason": oa.match_reason,
+            "official_source_status": oa.official_source_status,
+            "review_status": oa.review_status,
+        }
+
+        match_result = _match_driver(
+            db,
+            oa.reported_license or "",
+            oa.reported_phone or "",
+            oa.reported_driver_name or "",
+        )
+
+        if match_result["matched_driver_id"] is None:
+            skipped += 1
+            continue
+
+        if match_result["match_status"] == "manual_review":
+            oa.matched_driver_id = match_result["matched_driver_id"]
+            oa.match_status = "manual_review"
+            oa.match_confidence = None
+            oa.match_reason = (match_result.get("match_reason", "") or "multiple_candidates_in_drivers")
+            oa.review_status = "manual_review"
+            manual_review_set += 1
+        else:
+            oa.matched_driver_id = match_result["matched_driver_id"]
+            oa.match_status = match_result["match_status"]
+            oa.match_confidence = match_result["match_confidence"]
+            oa.match_reason = match_result["match_reason"]
+            official_status = _check_official_source(db, match_result["matched_driver_id"])
+            oa.official_source_status = official_status
+            if oa.review_status not in ("manual_review",):
+                oa.review_status = "observed_pending_review"
+            updated += 1
+
+        oa.updated_at = datetime.now()
+
+        after_state = {
+            "matched_driver_id": oa.matched_driver_id,
+            "match_status": oa.match_status,
+            "match_confidence": oa.match_confidence,
+            "match_reason": oa.match_reason,
+            "official_source_status": oa.official_source_status,
+            "review_status": oa.review_status,
+        }
+
+        audit = ReconciliationAudit(
+            driver_id=oa.matched_driver_id or "unknown",
+            observed_affiliation_id=oa.id,
+            action="reprocess_unmatched",
+            before_state=_json.dumps(before_state),
+            after_state=_json.dumps(after_state),
+            actor="system_operator",
+            reason=f"Reprocess unmatched: new match found for driver_id={oa.matched_driver_id}",
+            reconciliation_status="done",
+        )
+        db.add(audit)
+
+    db.commit()
+
+    return {
+        "total_candidates": len(candidates),
+        "updated": updated,
+        "manual_review_set": manual_review_set,
+        "skipped": skipped,
+        "errors": errors_info,
     }

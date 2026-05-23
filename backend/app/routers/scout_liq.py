@@ -140,6 +140,7 @@ from app.services.observed_affiliation_service import (
     export_observed_affiliations_csv,
     list_observed_affiliations,
     update_observed_review,
+    reprocess_unmatched_observed_affiliations,
 )
 from app.services.attribution_reconciliation_service import (
     get_reconciliation_summary,
@@ -3585,6 +3586,13 @@ def rec_export_csv(db: Session = Depends(get_db)):
 def rec_auto_detect(db: Session = Depends(get_db)):
     """Detecta observados que ahora aparecen en fuente oficial."""
     return detect_observed_now_official(db)
+
+
+@router.post("/reconciliation/reprocess-unmatched")
+def rec_reprocess_unmatched(db: Session = Depends(get_db)):
+    """Reintenta match para observed affiliations sin driver_id asignado."""
+    result = reprocess_unmatched_observed_affiliations(db)
+    return result
 
 
 @router.post("/reconciliation/refresh-view")
