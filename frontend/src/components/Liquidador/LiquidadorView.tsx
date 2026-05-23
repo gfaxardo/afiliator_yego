@@ -10,7 +10,7 @@ import type { SchemeResponse } from '../../api/scoutLiq'
 interface QualityContract { status: string; can_compute_trip_counts: boolean; uses_legacy_booleans_for_payment: boolean; sample_driver_trip_count: any; errors: string[] }
 interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string; cohort_iso_week?: string; cohort_from?: string; cohort_to?: string; maturity_days?: number; scheme_name?: string; scheme_type?: string; version_name?: string; min_activated?: number; activation_rule?: string; quality_rule?: string; snapshot_locked_at?: string; config_snapshot?: any; cutoff_mode?: string }
 interface Summary { id: number; scout_id: number; scout_name: string; origin: string; total_affiliations: number; total_activated: number; drivers_1plus_0_7: number; drivers_5plus_0_7: number; drivers_1plus_8_14: number; drivers_5plus_0_14: number; total_converted_5v14d: number; not_converted: number; conversion_rate: number; conversion_rate_5v7d: number; conversion_5plus_0_7_rate: number; tier_reached: number; payment_per_converted_driver: number; payout_per_activated: number; amount_calculated: number; total_payable: number; status: string; blocked_reason: string; metric_used: string }
-interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string; payment_formula_explanation?: string }
+interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string; payment_formula_explanation?: string; attribution_source?: string; observed_affiliation_id?: number; line_observation_status?: string; line_explanation?: string }
 
 // ── Derived display helpers (PRESENTATIONAL – no business logic) ──
 
@@ -124,6 +124,21 @@ function PaymentBadge({ status, reason, lineStatus }: { status: string; reason?:
   )
 }
 
+// ── Attribution Source Badge ──
+
+function AttributionBadge({ source }: { source?: string }) {
+  if (!source || source === 'official') return null
+  const label = source === 'observed' ? 'Observado' : source
+  const color = source === 'observed'
+    ? 'bg-amber-100 text-amber-700'
+    : 'bg-purple-100 text-purple-700'
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${color}`}>
+      {label}
+    </span>
+  )
+}
+
 const LINE_STATUS_LABELS: Record<string, string> = {
   payable: 'Pagable',
   paid: 'Pagado',
@@ -223,11 +238,13 @@ export default function LiquidadorView() {
     else if (preset === 'payable') setFilterLifecycle('payable')
     else if (preset === 'paid') setFilterLifecycle('paid')
     else if (preset === 'blocked') setFilterPayment('blocked')
+    else if (preset === 'observed') setFilterLifecycle('observed')
   }
 
   // Client-side filtered lines
   const filteredLines = lines.filter(l => {
     if (selectedScoutId && l.scout_id !== selectedScoutId) return false
+    if (filterLifecycle && filterLifecycle === 'observed') return l.attribution_source === 'observed'
     if (filterLifecycle && deriveDisplayLifecycle(l) !== filterLifecycle) return false
     if (filterPayment && l.payment_status !== filterPayment) return false
     if (filterOrigin && l.origin !== filterOrigin) return false
@@ -539,12 +556,13 @@ export default function LiquidadorView() {
               { key: 'payable', label: 'Pagables', color: 'border-emerald-300 text-emerald-600 hover:bg-emerald-50' },
               { key: 'paid', label: 'Pagados', color: 'border-teal-300 text-teal-600 hover:bg-teal-50' },
               { key: 'blocked', label: 'Bloqueados', color: 'border-red-300 text-red-700 hover:bg-red-50' },
+              { key: 'observed', label: 'Observados', color: 'border-amber-300 text-amber-600 hover:bg-amber-50' },
             ].map(p => (
               <button
                 key={p.key}
                 onClick={() => applyPreset(p.key)}
                 className={`px-2 py-0.5 text-[10px] font-medium border rounded transition-colors ${
-                  (filterLifecycle === p.key || (p.key === 'blocked' && filterPayment === 'blocked'))
+                  (filterLifecycle === p.key || (p.key === 'blocked' && filterPayment === 'blocked') || (p.key === 'observed' && filterLifecycle === 'observed'))
                     ? `${p.color} bg-opacity-20`
                     : `bg-white ${p.color}`
                 }`}
@@ -601,6 +619,7 @@ export default function LiquidadorView() {
           <div className="bg-white border rounded-lg overflow-x-auto max-h-[60vh] overflow-y-auto">
             <table className="w-full text-xs">
               <thead className="bg-gray-50 sticky top-0 border-b z-10"><tr>
+                <th className="text-left p-2">Fuente</th>
                 <th className="text-left p-2">Progreso</th>
                 <th className="text-left p-2">Driver ID</th>
                 <th className="text-left p-2">Hire</th>
@@ -617,6 +636,14 @@ export default function LiquidadorView() {
                   const lifecycle = deriveDisplayLifecycle(l)
                   return (
                     <tr key={l.id} className="hover:bg-blue-50/30 transition-colors">
+                      <td className="p-1.5">
+                        <AttributionBadge source={l.attribution_source} />
+                        {l.observed_affiliation_id && (
+                          <div className="text-[9px] text-gray-400" title={l.line_explanation || ''}>
+                            {l.line_observation_status || 'observado'}
+                          </div>
+                        )}
+                      </td>
                       <td className="p-1.5">
                         <ProgressIcons line={l} />
                       </td>

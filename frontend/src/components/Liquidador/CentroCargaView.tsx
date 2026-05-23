@@ -8,6 +8,12 @@ import {
   type UnifiedApplyLine,
   type UnifiedApplySummary,
   type UnifiedApplyAction,
+  previewObservedAffiliations,
+  applyObservedAffiliations,
+  getObservedExportUrl,
+  type ObservedPreviewResponse,
+  type ObservedApplyResponse,
+  type ObservedPreviewLine,
 } from '../../api/unifiedLoad'
 import {
   exportReconciliationCsv,
@@ -329,6 +335,8 @@ function triggerCsvDownload(csvContent: string, filename: string) {
 }
 
 export default function CentroCargaView() {
+  const [loadType, setLoadType] = useState<'unified' | 'observed'>('unified')
+
   const [preview, setPreview] = useState<UnifiedPreviewResponse | null>(null)
   const [previewStreamLines, setPreviewStreamLines] = useState<any[]>([])
   const [applySummary, setApplySummary] = useState<UnifiedApplySummary | null>(null)
@@ -337,6 +345,11 @@ export default function CentroCargaView() {
   const [sourceFileName, setSourceFileName] = useState<string>('')
   const [applyActionFilter, setApplyActionFilter] = useState<string>('all')
   const pendingFileRef = useRef<File | null>(null)
+
+  const [observedPreview, setObservedPreview] = useState<ObservedPreviewResponse | null>(null)
+  const [observedApplyResult, setObservedApplyResult] = useState<ObservedApplyResponse | null>(null)
+  const [observedLoading, setObservedLoading] = useState(false)
+  const [observedError, setObservedError] = useState<string | null>(null)
 
   const [reconFilters, setReconFilters] = useState({ hire_date_from: '', hire_date_to: '', scheme_type: '' })
   const [compareResult, setCompareResult] = useState<ReconciliationCompareResponse | null>(null)
@@ -637,6 +650,66 @@ export default function CentroCargaView() {
         </p>
       </div>
 
+      {/* ── Load Type Selector ── */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setLoadType('unified')}
+          className={`px-4 py-1.5 rounded-full text-xs font-medium transition ${
+            loadType === 'unified'
+              ? 'bg-blue-600 text-white'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}
+        >
+          Asignaciones Oficiales
+        </button>
+        <button
+          onClick={() => setLoadType('observed')}
+          className={`px-4 py-1.5 rounded-full text-xs font-medium transition ${
+            loadType === 'observed'
+              ? 'bg-amber-600 text-white'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}
+        >
+          Atribuciones Observadas
+        </button>
+      </div>
+
+      {loadType === 'observed' ? (
+        <ObservedLoadPanel
+          preview={observedPreview}
+          applyResult={observedApplyResult}
+          loading={observedLoading}
+          error={observedError}
+          onPreview={async (file: File) => {
+            setObservedLoading(true)
+            setObservedError(null)
+            setObservedPreview(null)
+            setObservedApplyResult(null)
+            try {
+              const result = await previewObservedAffiliations(file)
+              setObservedPreview(result)
+            } catch (e: any) {
+              setObservedError(e?.response?.data?.detail || e?.message || 'Error en preview')
+            } finally {
+              setObservedLoading(false)
+            }
+          }}
+          onApply={async (file: File) => {
+            setObservedLoading(true)
+            setObservedError(null)
+            setObservedApplyResult(null)
+            try {
+              const result = await applyObservedAffiliations(file)
+              setObservedApplyResult(result)
+            } catch (e: any) {
+              setObservedError(e?.response?.data?.detail || e?.message || 'Error al aplicar')
+            } finally {
+              setObservedLoading(false)
+            }
+          }}
+        />
+      ) : (
+        <>
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-3 text-sm">{error}</div>
       )}
@@ -1189,6 +1262,218 @@ export default function CentroCargaView() {
           </p>
         )}
       </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OBSERVED LOAD PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+
+function ObservedLoadPanel({
+  preview,
+  applyResult,
+  loading,
+  error,
+  onPreview,
+  onApply,
+}: {
+  preview: ObservedPreviewResponse | null
+  applyResult: ObservedApplyResponse | null
+  loading: boolean
+  error: string | null
+  onPreview: (file: File) => void
+  onApply: (file: File) => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (f) {
+      setFile(f)
+      onPreview(f)
+    }
+  }
+
+  const handleApply = () => {
+    if (file) onApply(file)
+  }
+
+  const handleExport = () => {
+    const url = getObservedExportUrl()
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'atribuciones_observadas.csv'
+    a.click()
+  }
+
+  const matchBadge = (status: string | null) => {
+    const m: Record<string, { label: string; cls: string }> = {
+      matched: { label: 'Match', cls: 'bg-green-100 text-green-700' },
+      unmatched: { label: 'Sin match', cls: 'bg-red-100 text-red-700' },
+      manual_review: { label: 'Revision', cls: 'bg-yellow-100 text-yellow-700' },
+    }
+    const s = status || 'pending'
+    const b = m[s] || { label: s, cls: 'bg-gray-100 text-gray-500' }
+    return <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${b.cls}`}>{b.label}</span>
+  }
+
+  const officialBadge = (status: string | null) => {
+    const m: Record<string, { label: string; cls: string }> = {
+      official_found: { label: 'Oficial OK', cls: 'bg-green-100 text-green-700' },
+      official_missing: { label: 'Fuera oficial', cls: 'bg-amber-100 text-amber-700' },
+      official_unknown: { label: 'Desconocido', cls: 'bg-gray-100 text-gray-500' },
+    }
+    const s = status || 'official_unknown'
+    const b = m[s] || { label: s, cls: 'bg-gray-100 text-gray-500' }
+    return <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${b.cls}`}>{b.label}</span>
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="p-4 rounded-lg border border-amber-200 bg-amber-50">
+        <h3 className="text-sm font-semibold text-amber-800 mb-2">Atribuciones Observadas</h3>
+        <p className="text-xs text-amber-600 mb-3">
+          Carga conductores reportados por scouts/supervisores que no aparecen en la fuente oficial.
+          Columnas: fecha_afiliacion, origen, scout, supervisor, nombre_driver, licencia, telefono.
+        </p>
+
+        <input
+          type="file"
+          accept=".csv,.xlsx"
+          onChange={handleFileChange}
+          disabled={loading}
+          className="text-xs"
+        />
+
+        {loading && (
+          <div className="mt-2 text-xs text-amber-700">Procesando...</div>
+        )}
+
+        {error && (
+          <div className="mt-2 bg-red-50 border border-red-200 text-red-700 rounded p-2 text-xs">{error}</div>
+        )}
+      </div>
+
+      {/* Preview */}
+      {preview && (
+        <div className="space-y-3">
+          {/* Summary stats */}
+          <div className="grid grid-cols-4 gap-2">
+            <div className="bg-white border rounded p-2 text-center">
+              <div className="text-[10px] text-gray-400">Total</div>
+              <div className="text-sm font-bold">{preview.summary.total}</div>
+            </div>
+            <div className="bg-green-50 border border-green-200 rounded p-2 text-center">
+              <div className="text-[10px] text-green-600">Match High</div>
+              <div className="text-sm font-bold text-green-700">{preview.summary.matched_high}</div>
+            </div>
+            <div className="bg-blue-50 border border-blue-200 rounded p-2 text-center">
+              <div className="text-[10px] text-blue-600">Match Medium</div>
+              <div className="text-sm font-bold text-blue-700">{preview.summary.matched_medium}</div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-center">
+              <div className="text-[10px] text-amber-600">Official Missing</div>
+              <div className="text-sm font-bold text-amber-700">{preview.summary.official_missing}</div>
+            </div>
+            <div className="bg-yellow-50 border border-yellow-200 rounded p-2 text-center">
+              <div className="text-[10px] text-yellow-600">Manual Review</div>
+              <div className="text-sm font-bold text-yellow-700">{preview.summary.manual_review}</div>
+            </div>
+            <div className="bg-red-50 border border-red-200 rounded p-2 text-center">
+              <div className="text-[10px] text-red-600">Unmatched</div>
+              <div className="text-sm font-bold text-red-700">{preview.summary.unmatched}</div>
+            </div>
+            <div className="bg-red-50 border border-red-200 rounded p-2 text-center">
+              <div className="text-[10px] text-red-600">Errores</div>
+              <div className="text-sm font-bold text-red-700">{preview.summary.errors}</div>
+            </div>
+            <div className="bg-white border rounded p-2 text-center">
+              <div className="text-[10px] text-gray-400">Validos</div>
+              <div className="text-sm font-bold">{preview.summary.valid}</div>
+            </div>
+          </div>
+
+          {/* Apply + Actions */}
+          <div className="flex gap-2">
+            <button
+              onClick={handleApply}
+              disabled={preview.summary.valid === 0}
+              className="px-4 py-2 bg-amber-600 text-white rounded text-xs font-medium hover:bg-amber-700 disabled:opacity-50"
+            >
+              Guardar Atribuciones ({preview.summary.valid})
+            </button>
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-white border border-gray-300 rounded text-xs text-gray-600 hover:bg-gray-50"
+            >
+              Exportar CSV
+            </button>
+          </div>
+
+          {/* Lines table */}
+          {preview.lines.length > 0 && (
+            <div className="overflow-x-auto max-h-[400px] overflow-y-auto border rounded">
+              <table className="w-full text-[11px]">
+                <thead className="bg-gray-50 sticky top-0">
+                  <tr>
+                    <th className="text-left px-2 py-1.5">#</th>
+                    <th className="text-left px-2 py-1.5">Fecha</th>
+                    <th className="text-left px-2 py-1.5">Scout</th>
+                    <th className="text-left px-2 py-1.5">Supervisor</th>
+                    <th className="text-left px-2 py-1.5">Licencia</th>
+                    <th className="text-left px-2 py-1.5">Telefono</th>
+                    <th className="text-left px-2 py-1.5">Driver ID</th>
+                    <th className="text-left px-2 py-1.5">Match</th>
+                    <th className="text-left px-2 py-1.5">Oficial</th>
+                    <th className="text-left px-2 py-1.5">Review</th>
+                    <th className="text-left px-2 py-1.5">Motivo</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {preview.lines.map((l, i) => (
+                    <tr key={i} className={l.has_error ? 'bg-red-50' : ''}>
+                      <td className="px-2 py-1.5 text-gray-400">{l.row}</td>
+                      <td className="px-2 py-1.5 font-mono">{l.fecha_afiliacion || '-'}</td>
+                      <td className="px-2 py-1.5">{l.scout || '-'}</td>
+                      <td className="px-2 py-1.5">{l.supervisor || '-'}</td>
+                      <td className="px-2 py-1.5 font-mono">{l.licencia || '-'}</td>
+                      <td className="px-2 py-1.5 font-mono">{l.telefono || '-'}</td>
+                      <td className="px-2 py-1.5 font-mono text-[10px] max-w-[120px] truncate">{l.matched_driver_id || '-'}</td>
+                      <td className="px-2 py-1.5">{matchBadge(l.match_status)}</td>
+                      <td className="px-2 py-1.5">{officialBadge(l.official_source_status)}</td>
+                      <td className="px-2 py-1.5">{l.review_status || '-'}</td>
+                      <td className="px-2 py-1.5 text-gray-500 max-w-[200px] truncate">{l.match_reason || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Apply Result */}
+      {applyResult && (
+        <div className={`p-3 rounded-lg border ${
+          applyResult.errors > 0 ? 'bg-yellow-50 border-yellow-200' : 'bg-green-50 border-green-200'
+        }`}>
+          <p className="text-xs font-medium">
+            {applyResult.saved > 0 ? `Guardado: ${applyResult.saved} atribuciones` : ''}
+            {applyResult.duplicates > 0 ? `, ${applyResult.duplicates} duplicados` : ''}
+            {applyResult.errors > 0 ? `, ${applyResult.errors} errores` : ''}
+          </p>
+          {applyResult.error_details?.length > 0 && (
+            <div className="mt-2 text-[10px] text-red-600 space-y-0.5">
+              {applyResult.error_details.map((e, i) => (
+                <div key={i}>Fila {e.row}: {e.error}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

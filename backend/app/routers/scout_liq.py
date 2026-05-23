@@ -132,6 +132,28 @@ from app.services.unified_load_service import (
     _parse_rows_from_csv,
     _parse_rows_from_xlsx,
 )
+from app.services.observed_affiliation_service import (
+    preview_observed_affiliations,
+    apply_observed_affiliations,
+    parse_observed_csv,
+    parse_observed_xlsx,
+    export_observed_affiliations_csv,
+    list_observed_affiliations,
+    update_observed_review,
+)
+from app.services.attribution_reconciliation_service import (
+    get_reconciliation_summary,
+    get_reconciliation_list,
+    export_reconciliation_csv,
+    approve_reconciliation,
+    reject_reconciliation,
+    merge_observed_to_official,
+    detect_observed_now_official,
+    get_driver_timeline,
+    detect_conflicts,
+    get_integrity_metrics,
+    refresh_reconciliation_view,
+)
 from app.services.scout_liq_health_service import (
     get_health_summary,
     get_health_summary_lite,
@@ -202,6 +224,18 @@ from app.schemas.scout_liq import (
     ReconciliationCompareResponse,
     UnifiedLoadPreviewResponse,
     UnifiedLoadApplyResponse,
+    ObservedAffiliationPreviewResponse,
+    ObservedAffiliationApplyResponse,
+    ObservedAffiliationListResponse,
+    UpdateObservedReviewRequest,
+    ReconciliationSummaryResponse,
+    ReconciliationListResponse,
+    ReconciliationActionRequest,
+    ReconciliationActionResult,
+    DriverTimelineResponse,
+    AutoDetectResponse,
+    ConflictItem,
+    IntegrityMetricsResponse,
 )
 
 router = APIRouter(prefix="/scout-liq", tags=["scout-liq"])
@@ -3412,3 +3446,198 @@ def get_rescue_csv(preview_id: str):
             "Content-Type": "text/csv; charset=utf-8-sig",
         },
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OBSERVED AFFILIATIONS — Flujo de Atribuciones Observadas
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.post("/observed-affiliations/preview", response_model=ObservedAffiliationPreviewResponse)
+def observed_affiliations_preview(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Preview de carga de atribuciones observadas (CSV o XLSX)."""
+    content = file.file.read()
+    filename = (file.filename or "").lower()
+    if filename.endswith(".csv"):
+        rows = parse_observed_csv(content)
+    elif filename.endswith(".xlsx"):
+        rows = parse_observed_xlsx(content)
+    else:
+        raise HTTPException(status_code=400, detail="Formato no soportado. Use CSV o XLSX.")
+    result = preview_observed_affiliations(db, rows)
+    return result
+
+
+@router.post("/observed-affiliations/apply", response_model=ObservedAffiliationApplyResponse)
+def observed_affiliations_apply(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Aplica carga de atribuciones observadas."""
+    content = file.file.read()
+    filename = (file.filename or "").lower()
+    if filename.endswith(".csv"):
+        rows = parse_observed_csv(content)
+    elif filename.endswith(".xlsx"):
+        rows = parse_observed_xlsx(content)
+    else:
+        raise HTTPException(status_code=400, detail="Formato no soportado. Use CSV o XLSX.")
+    result = apply_observed_affiliations(db, rows)
+    return result
+
+
+@router.get("/observed-affiliations", response_model=ObservedAffiliationListResponse)
+def list_observed(
+    review_status: Optional[str] = Query(None),
+    match_status: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Lista atribuciones observadas con filtros."""
+    return list_observed_affiliations(db, review_status, match_status, limit, offset)
+
+
+@router.put("/observed-affiliations/{observed_id}/review")
+def review_observed(
+    observed_id: int,
+    body: UpdateObservedReviewRequest,
+    db: Session = Depends(get_db),
+):
+    """Actualiza estado de revision de una atribucion observada."""
+    result = update_observed_review(db, observed_id, body.review_status, body.review_notes)
+    if not result:
+        raise HTTPException(status_code=404, detail="Atribucion observada no encontrada")
+    return result
+
+
+@router.get("/observed-affiliations/export")
+def export_observed_csv(db: Session = Depends(get_db)):
+    """Exporta todas las atribuciones observadas como CSV."""
+    csv_content = "\ufeff" + export_observed_affiliations_csv(db)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=atribuciones_observadas.csv",
+            "Content-Type": "text/csv; charset=utf-8",
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ATTRIBUTION RECONCILIATION & GOVERNANCE
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/reconciliation/summary", response_model=ReconciliationSummaryResponse)
+def rec_summary(db: Session = Depends(get_db)):
+    """KPIs de reconciliacion de atribucion."""
+    return get_reconciliation_summary(db)
+
+
+@router.get("/reconciliation/integrity", response_model=IntegrityMetricsResponse)
+def rec_integrity(db: Session = Depends(get_db)):
+    """Metricas computacionales de integridad."""
+    return get_integrity_metrics(db)
+
+
+@router.get("/reconciliation/list", response_model=ReconciliationListResponse)
+def rec_list(
+    reconciliation_class: Optional[str] = Query(None),
+    confidence: Optional[str] = Query(None),
+    review_status: Optional[str] = Query(None),
+    scout: Optional[str] = Query(None),
+    origin: Optional[str] = Query(None),
+    aging: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Lista paginada de registros de reconciliacion."""
+    return get_reconciliation_list(
+        db, reconciliation_class, confidence, review_status,
+        scout, origin, aging, limit, offset,
+    )
+
+
+@router.get("/reconciliation/export")
+def rec_export_csv(db: Session = Depends(get_db)):
+    """Exporta el estado de reconciliacion como CSV."""
+    csv_content = "\ufeff" + export_reconciliation_csv(db)
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=reconciliation_state.csv",
+            "Content-Type": "text/csv; charset=utf-8",
+        },
+    )
+
+
+@router.post("/reconciliation/auto-detect", response_model=List[AutoDetectResponse])
+def rec_auto_detect(db: Session = Depends(get_db)):
+    """Detecta observados que ahora aparecen en fuente oficial."""
+    return detect_observed_now_official(db)
+
+
+@router.post("/reconciliation/refresh-view")
+def rec_refresh(db: Session = Depends(get_db)):
+    """Refresca la vista materializada de reconciliacion."""
+    refresh_reconciliation_view(db)
+    return {"status": "ok", "message": "Vista materializada refrescada"}
+
+
+@router.post("/reconciliation/{observed_id}/approve", response_model=ReconciliationActionResult)
+def rec_approve(
+    observed_id: int,
+    body: ReconciliationActionRequest,
+    db: Session = Depends(get_db),
+):
+    """Aprueba una observacion para pago."""
+    result = approve_reconciliation(db, observed_id, body.actor, body.reason)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/reconciliation/{observed_id}/reject", response_model=ReconciliationActionResult)
+def rec_reject(
+    observed_id: int,
+    body: ReconciliationActionRequest,
+    db: Session = Depends(get_db),
+):
+    """Rechaza una observacion."""
+    result = reject_reconciliation(db, observed_id, body.actor, body.reason)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.post("/reconciliation/{observed_id}/merge", response_model=ReconciliationActionResult)
+def rec_merge(
+    observed_id: int,
+    body: ReconciliationActionRequest,
+    db: Session = Depends(get_db),
+):
+    """Merge: convierte observado en atribucion oficial."""
+    result = merge_observed_to_official(db, observed_id, body.assign_scout, body.actor)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@router.get("/reconciliation/driver/{driver_id}/timeline", response_model=DriverTimelineResponse)
+def rec_driver_timeline(
+    driver_id: str,
+    db: Session = Depends(get_db),
+):
+    """Linea de tiempo de atribucion para un driver."""
+    return get_driver_timeline(db, driver_id)
+
+
+@router.get("/reconciliation/conflicts", response_model=List[ConflictItem])
+def rec_conflicts(db: Session = Depends(get_db)):
+    """Lista conflictos activos de atribucion."""
+    return detect_conflicts(db)

@@ -318,3 +318,299 @@ export async function applyUnifiedLoadStream(
     }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OBSERVED AFFILIATIONS API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ObservedPreviewLine {
+  row: number
+  fecha_afiliacion: string | null
+  origen: string | null
+  scout: string | null
+  supervisor: string | null
+  nombre_driver: string | null
+  licencia: string | null
+  telefono: string | null
+  normalized_license: string | null
+  normalized_phone: string | null
+  matched_driver_id: string | null
+  match_status: string | null
+  match_confidence: string | null
+  match_reason: string | null
+  official_source_status: string | null
+  review_status: string | null
+  has_error: boolean
+}
+
+export interface ObservedPreviewSummary {
+  total: number
+  matched_high: number
+  matched_medium: number
+  manual_review: number
+  unmatched: number
+  official_missing: number
+  errors: number
+  valid: number
+}
+
+export interface ObservedPreviewResponse {
+  total_rows: number
+  lines: ObservedPreviewLine[]
+  errors: { row: number; error: string }[]
+  summary: ObservedPreviewSummary
+}
+
+export interface ObservedApplyResponse {
+  saved: number
+  duplicates: number
+  errors: number
+  error_details: { row: number; error: string }[]
+}
+
+export interface ObservedItem {
+  id: number
+  reported_affiliation_date: string | null
+  reported_origin: string | null
+  reported_scout_name: string | null
+  reported_supervisor_name: string | null
+  reported_driver_name: string | null
+  reported_license: string | null
+  reported_phone: string | null
+  matched_driver_id: string | null
+  match_status: string | null
+  match_confidence: string | null
+  match_reason: string | null
+  official_source_status: string | null
+  review_status: string | null
+  review_notes: string | null
+  created_at: string | null
+}
+
+export interface ObservedListResponse {
+  total: number
+  limit: number
+  offset: number
+  items: ObservedItem[]
+}
+
+const API_BASE = '/api/scout-liq'
+const apiObserved = axios.create({ baseURL: API_BASE, timeout: 120000 })
+
+export async function previewObservedAffiliations(file: File): Promise<ObservedPreviewResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await apiObserved.post('/observed-affiliations/preview', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return res.data
+}
+
+export async function applyObservedAffiliations(file: File): Promise<ObservedApplyResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+  const res = await apiObserved.post('/observed-affiliations/apply', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return res.data
+}
+
+export async function listObservedAffiliations(
+  reviewStatus?: string,
+  matchStatus?: string,
+  limit = 100,
+  offset = 0,
+): Promise<ObservedListResponse> {
+  const params: Record<string, string | number> = { limit, offset }
+  if (reviewStatus) params.review_status = reviewStatus
+  if (matchStatus) params.match_status = matchStatus
+  const res = await apiObserved.get('/observed-affiliations', { params })
+  return res.data
+}
+
+export async function updateObservedReview(
+  id: number,
+  reviewStatus: string,
+  reviewNotes?: string,
+): Promise<any> {
+  const res = await apiObserved.put(`/observed-affiliations/${id}/review`, {
+    review_status: reviewStatus,
+    review_notes: reviewNotes,
+  })
+  return res.data
+}
+
+export function getObservedExportUrl(): string {
+  return `${API_BASE}/observed-affiliations/export`
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RECONCILIATION & GOVERNANCE API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ReconciliationSummary {
+  attribution_integrity_pct: number
+  total_observed: number
+  total_pending: number
+  total_validated: number
+  total_rejected: number
+  matched_high: number
+  matched_medium: number
+  manual_review: number
+  unmatched: number
+  official_missing: number
+  official_found: number
+  operational_gaps: number
+  total_source_drivers: number
+  total_drivers_in_db: number
+  auto_detectable_reconciliations: number
+  active_conflicts: number
+  aging: { pending_24h: number; pending_1_3d: number; pending_gt_3d: number }
+  scouts_with_most_conflicts: { scout: string; count: number }[]
+}
+
+export interface ReconciliationItem {
+  observed_id: number
+  driver_id: string | null
+  reported_driver_name: string | null
+  reported_scout_name: string | null
+  reported_supervisor_name: string | null
+  reported_origin: string | null
+  reported_license: string | null
+  reported_phone: string | null
+  match_status: string | null
+  match_confidence: string | null
+  match_reason: string | null
+  official_source_status: string | null
+  review_status: string | null
+  review_notes: string | null
+  reported_affiliation_date: string | null
+  observed_created_at: string | null
+  classification: string
+  confidence_level: string
+  in_official: boolean
+  has_active_assignment: boolean
+  has_paid_blocking: boolean
+  has_cutoff_line: boolean
+  aging: string
+}
+
+export interface ReconciliationListResponse {
+  total: number
+  limit: number
+  offset: number
+  items: ReconciliationItem[]
+}
+
+export interface DriverTimeline {
+  driver_id: string
+  in_official_source: boolean
+  first_trip_at: string | null
+  observed_history: {
+    id: number; observed_at: string; reported_scout: string
+    match_confidence: string; review_status: string; official_source_status: string
+  }[]
+  cutoff_lines: {
+    id: number; cutoff_run_id: number; scout_id: number
+    attribution_source: string; payment_status: string
+    calculated_amount: number | null; line_explanation: string
+    created_at: string
+  }[]
+  paid_history: {
+    id: number; paid_at: string; amount_paid: number
+    import_source: string; blocks_future_payment: boolean
+  }[]
+  audit_trail: {
+    id: number; action: string; actor: string
+    reason: string; reconciliation_status: string; created_at: string
+  }[]
+}
+
+export interface ReconciliationActionResult {
+  observed_id: number
+  action: string
+  error?: string
+  before?: any
+  after?: any
+  assignment_created?: boolean
+  driver_id?: string
+}
+
+export interface AutoDetectItem {
+  observed_id: number
+  driver_id: string
+  reported_scout_name: string
+  reported_driver_name: string
+  original_official_status: string
+  now_in_official: boolean
+  suggested_action: string
+}
+
+export interface IntegrityMetrics {
+  attribution_integrity_pct: number
+  missing_attribution_rate: number
+  observed_only_count: number
+  official_only_count: number
+  active_conflicts: number
+  auto_detectable: number
+  scouts_with_conflicts: { scout: string; count: number }[]
+  aging: { pending_24h: number; pending_1_3d: number; pending_gt_3d: number }
+  total_observed: number
+  total_validated: number
+  total_rejected: number
+}
+
+const apiRec = axios.create({ baseURL: API_BASE, timeout: 60000 })
+
+export async function getReconciliationSummary(): Promise<ReconciliationSummary> {
+  const res = await apiRec.get('/reconciliation/summary')
+  return res.data
+}
+
+export async function getIntegrityMetrics(): Promise<IntegrityMetrics> {
+  const res = await apiRec.get('/reconciliation/integrity')
+  return res.data
+}
+
+export async function getReconciliationList(params: Record<string, string | number>): Promise<ReconciliationListResponse> {
+  const cleanParams: Record<string, string | number> = {}
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') cleanParams[k] = v
+  }
+  const res = await apiRec.get('/reconciliation/list', { params: cleanParams })
+  return res.data
+}
+
+export async function autoDetectReconciliations(): Promise<AutoDetectItem[]> {
+  const res = await apiRec.post('/reconciliation/auto-detect')
+  return res.data
+}
+
+export async function refreshReconciliationView(): Promise<any> {
+  const res = await apiRec.post('/reconciliation/refresh-view')
+  return res.data
+}
+
+export async function approveReconciliation(id: number, actor?: string, reason?: string): Promise<ReconciliationActionResult> {
+  const res = await apiRec.post(`/reconciliation/${id}/approve`, { actor, reason })
+  return res.data
+}
+
+export async function rejectReconciliation(id: number, actor?: string, reason?: string): Promise<ReconciliationActionResult> {
+  const res = await apiRec.post(`/reconciliation/${id}/reject`, { actor, reason })
+  return res.data
+}
+
+export async function mergeReconciliation(id: number, assign_scout?: boolean, actor?: string): Promise<ReconciliationActionResult> {
+  const res = await apiRec.post(`/reconciliation/${id}/merge`, { assign_scout, actor })
+  return res.data
+}
+
+export async function getDriverTimeline(driverId: string): Promise<DriverTimeline> {
+  const res = await apiRec.get(`/reconciliation/driver/${encodeURIComponent(driverId)}/timeline`)
+  return res.data
+}
+
+export function getReconciliationExportUrl(): string {
+  return `${API_BASE}/reconciliation/export`
+}

@@ -9,9 +9,11 @@ from sqlalchemy import (
     Text,
     ForeignKey,
     Index,
+    Float,
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from sqlalchemy.ext.declarative import declarative_base
@@ -250,11 +252,49 @@ class CutoffDriverLine(Base):
     blocked_reason = Column(Text)
     payment_formula_explanation = Column(Text)
     already_paid = Column(Boolean, default=False)
+    attribution_source = Column(String(50), default="official", server_default="official")
+    observed_affiliation_id = Column(Integer, nullable=True)
+    line_observation_status = Column(String(50), nullable=True)
+    line_explanation = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     cutoff_run = relationship("CutoffRun", back_populates="lines")
     scout = relationship("Scout", back_populates="cutoff_lines")
+
+
+class ObservedAffiliation(Base):
+    __tablename__ = "scout_liq_observed_affiliations"
+    __table_args__ = (
+        Index("ix_oa_normalized_license", "normalized_license"),
+        Index("ix_oa_normalized_phone", "normalized_phone"),
+        Index("ix_oa_matched_driver_id", "matched_driver_id"),
+        Index("ix_oa_reported_affiliation_date", "reported_affiliation_date"),
+        Index("ix_oa_review_status", "review_status"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_file_id = Column(Integer, nullable=True)
+    row_number = Column(Integer, nullable=True)
+    reported_affiliation_date = Column(Date, nullable=False)
+    reported_origin = Column(String(100), nullable=True)
+    reported_scout_name = Column(String(255), nullable=True)
+    reported_supervisor_name = Column(String(255), nullable=True)
+    reported_driver_name = Column(String(255), nullable=True)
+    reported_license = Column(String(100), nullable=True)
+    reported_phone = Column(String(50), nullable=True)
+    normalized_license = Column(String(100), nullable=True)
+    normalized_phone = Column(String(50), nullable=True)
+    matched_driver_id = Column(String(100), nullable=True)
+    match_status = Column(String(50), default="pending")
+    match_confidence = Column(String(20), nullable=True)
+    match_reason = Column(Text, nullable=True)
+    official_source_status = Column(String(50), nullable=True)
+    review_status = Column(String(50), nullable=False, default="observed_pending_review", server_default="observed_pending_review")
+    review_notes = Column(Text, nullable=True)
+    raw_payload = Column(JSONB, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
 class PaidHistory(Base):
@@ -647,3 +687,25 @@ class HealthEvent(Base):
     detected_at = Column(DateTime, server_default=func.now())
     resolved_at = Column(DateTime, nullable=True)
     metadata_json = Column(Text, nullable=True)
+
+
+class ReconciliationAudit(Base):
+    __tablename__ = "scout_liq_reconciliation_audit"
+    __table_args__ = (
+        Index("ix_rec_audit_driver", "driver_id"),
+        Index("ix_rec_audit_observed_id", "observed_affiliation_id"),
+        Index("ix_rec_audit_action", "action"),
+        Index("ix_rec_audit_created", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    driver_id = Column(String(100), nullable=False)
+    observed_affiliation_id = Column(Integer, nullable=True)
+    observed_review_id = Column(Integer, nullable=True)
+    action = Column(String(50), nullable=False)
+    before_state = Column(JSONB, nullable=True)
+    after_state = Column(JSONB, nullable=True)
+    actor = Column(String(100), nullable=True)
+    reason = Column(Text, nullable=True)
+    reconciliation_status = Column(String(50), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())

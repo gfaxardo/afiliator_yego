@@ -18,6 +18,11 @@ from app.models.scout_liq import (
     CutoffRun, CutoffScoutSummary, CutoffDriverLine, PaidHistory,
 )
 from app.adapters.source_adapter import compute_trip_counts_batch
+from app.services.observed_affiliation_service import (
+    get_observed_for_cutoff,
+    compute_observed_trip_counts,
+    check_double_payment_observed,
+)
 from app.services.cohort_service import iso_week_dates, cohort_maturity, get_iso_cohorts
 from app.services.payment_scheme_resolver import resolve_payment_scheme_for_cohort
 from app.services.cutoff_helpers import (
@@ -291,6 +296,89 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
         )
         scout_groups[sid]["lines"].append(line)
         db.add(line)
+
+    db.flush()
+
+    # ── Phase 2: Observed Affiliations ──
+    observed_records = get_observed_for_cutoff(
+        db,
+        window_from=run.hire_date_from,
+        window_to=run.hire_date_to,
+    )
+
+    for obs in observed_records:
+        did = obs.get("matched_driver_id")
+        oa_id = obs.get("id")
+        if not did:
+            continue
+
+        double_check = check_double_payment_observed(db, did, cutoff_run_id)
+        if double_check["blocked"]:
+            continue
+
+        aff_date_str = obs.get("reported_affiliation_date")
+        hire_date = None
+        if aff_date_str:
+            try:
+                hire_date = datetime.strptime(aff_date_str, "%Y-%m-%d").date()
+            except ValueError:
+                pass
+
+        o_trips = compute_observed_trip_counts(db, did, hire_date) if hire_date else {"trips_0_7_count": 0, "trips_8_14_count": 0, "trips_0_14_count": 0}
+        t7 = o_trips["trips_0_7_count"]
+        t14 = o_trips["trips_8_14_count"]
+        t0_14 = o_trips["trips_0_14_count"]
+        already_paid_oa = check_already_paid(db, did)
+
+        origin = obs.get("reported_origin") or ""
+
+        # Find or create scout for observed
+        scout_name = obs.get("reported_scout_name") or ""
+        scout_obj = db.query(Scout).filter(Scout.scout_name == scout_name).first()
+        if not scout_obj:
+            scout_obj = Scout(scout_name=scout_name or f"scout_observed_{oa_id}", status="active")
+            db.add(scout_obj)
+            db.flush()
+
+        sid = scout_obj.id
+        if sid not in scout_groups:
+            scout_groups[sid] = {
+                "scout": scout_obj,
+                "scheme": scheme,
+                "tiers": tiers,
+                "lines": [],
+            }
+
+        obs_line = CutoffDriverLine(
+            cutoff_run_id=cutoff_run_id,
+            scout_id=sid,
+            driver_id=did,
+            hire_date=hire_date,
+            origin=origin,
+            trips_7d=t7,
+            trips_14d=t0_14,
+            trips_0_7_count=t7,
+            trips_8_14_count=t14,
+            trips_0_14_count=t0_14,
+            total_orders=None,
+            legacy_viajes_0_7_flag=False,
+            legacy_viajes_8_14_flag=False,
+            source_quality_status="ok" if hire_date else "invalid_hire_date",
+            source_warning="Atribucion observada: no presente en fuente oficial" if obs.get("official_source_status") == "official_missing" else None,
+            line_status="evaluating",
+            already_paid=already_paid_oa,
+            attribution_source="observed",
+            observed_affiliation_id=oa_id,
+            line_observation_status=obs.get("review_status"),
+            line_explanation=(
+                f"Driver {did} ({obs.get('reported_driver_name') or 'sin nombre'}): "
+                f"match={obs.get('match_status')} conf={obs.get('match_confidence')}. "
+                f"Fuente oficial: {obs.get('official_source_status')}. "
+                f"Motivo: {obs.get('match_reason') or 'N/A'}"
+            ),
+        )
+        scout_groups[sid]["lines"].append(obs_line)
+        db.add(obs_line)
 
     db.flush()
 
@@ -592,6 +680,10 @@ def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = 
             "source_quality_status": l.source_quality_status,
             "source_warning": l.source_warning,
             "payment_formula_explanation": l.payment_formula_explanation,
+            "attribution_source": l.attribution_source or "official",
+            "observed_affiliation_id": l.observed_affiliation_id,
+            "line_observation_status": l.line_observation_status,
+            "line_explanation": l.line_explanation,
         }
         for l in lines
     ]
@@ -651,6 +743,7 @@ def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             config = json.loads(run.config_snapshot) if run.config_snapshot else {}
             scheme_id = config.get("scheme_id")
             scheme_name = config.get("scheme_name", "")
+            is_observed = l.attribution_source == "observed"
             ph = PaidHistory(
                 cutoff_run_id=cutoff_run_id,
                 scout_id=s.scout_id,
@@ -660,7 +753,7 @@ def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 amount_paid=l.calculated_amount or s.payout_per_activated,
                 currency="PEN",
                 paid_at=datetime.now(),
-                import_source="cutoff_engine",
+                import_source="cutoff_observed" if is_observed else "cutoff_engine",
                 payment_component="scout_driver_payment",
                 payment_scheme_id=scheme_id,
                 payment_scheme_name=scheme_name,
@@ -669,6 +762,7 @@ def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 cutoff_window_to=run.hire_date_to,
                 status="paid",
                 blocks_future_payment=True,
+                resolution_status="observed" if is_observed else None,
             )
             db.add(ph)
             l.line_status = "paid"
@@ -765,6 +859,9 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
         "payment_reason", "trace_status", "trace_warning",
         "payment_formula_explanation",
         "cutoff_mode",
+        "attribution_source",
+        "line_observation_status",
+        "line_explanation",
     ])
 
     # Cohorte fields (same for all rows)
@@ -872,6 +969,9 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
             payment_reason, trace_status, trace_warning or "",
             l.payment_formula_explanation or "",
             run.cutoff_mode or "COHORT",
+            l.attribution_source or "official",
+            l.line_observation_status or "",
+            l.line_explanation or "",
         ])
 
     return buf.getvalue()

@@ -846,3 +846,238 @@ class UnifiedLoadApplyResponse(BaseModel):
     payments_existing: int = 0
     commit_ok: Optional[bool] = None
     commit_error: Optional[str] = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OBSERVED AFFILIATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ObservedAffiliationPreviewLine(BaseModel):
+    row: int = 0
+    fecha_afiliacion: Optional[str] = None
+    origen: Optional[str] = None
+    scout: Optional[str] = None
+    supervisor: Optional[str] = None
+    nombre_driver: Optional[str] = None
+    licencia: Optional[str] = None
+    telefono: Optional[str] = None
+    normalized_license: Optional[str] = None
+    normalized_phone: Optional[str] = None
+    matched_driver_id: Optional[str] = None
+    match_status: Optional[str] = None
+    match_confidence: Optional[str] = None
+    match_reason: Optional[str] = None
+    official_source_status: Optional[str] = None
+    review_status: Optional[str] = None
+    has_error: bool = False
+
+
+class ObservedAffiliationSummary(BaseModel):
+    total: int = 0
+    matched_high: int = 0
+    matched_medium: int = 0
+    manual_review: int = 0
+    unmatched: int = 0
+    official_missing: int = 0
+    errors: int = 0
+    valid: int = 0
+
+
+class ObservedAffiliationPreviewResponse(BaseModel):
+    total_rows: int = 0
+    lines: List[ObservedAffiliationPreviewLine] = []
+    errors: List[Any] = []
+    summary: ObservedAffiliationSummary = ObservedAffiliationSummary()
+
+
+class ObservedAffiliationApplyResponse(BaseModel):
+    saved: int = 0
+    duplicates: int = 0
+    errors: int = 0
+    error_details: List[Any] = []
+
+
+class ObservedAffiliationItem(BaseModel):
+    id: Optional[int] = None
+    reported_affiliation_date: Optional[str] = None
+    reported_origin: Optional[str] = None
+    reported_scout_name: Optional[str] = None
+    reported_supervisor_name: Optional[str] = None
+    reported_driver_name: Optional[str] = None
+    reported_license: Optional[str] = None
+    reported_phone: Optional[str] = None
+    matched_driver_id: Optional[str] = None
+    match_status: Optional[str] = None
+    match_confidence: Optional[str] = None
+    match_reason: Optional[str] = None
+    official_source_status: Optional[str] = None
+    review_status: Optional[str] = None
+    review_notes: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class ObservedAffiliationListResponse(BaseModel):
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+    items: List[ObservedAffiliationItem] = []
+
+
+class UpdateObservedReviewRequest(BaseModel):
+    review_status: str
+    review_notes: Optional[str] = None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ATTRIBUTION RECONCILIATION & GOVERNANCE
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ReconciliationSummaryResponse(BaseModel):
+    attribution_integrity_pct: float = 0.0
+    total_observed: int = 0
+    total_pending: int = 0
+    total_validated: int = 0
+    total_rejected: int = 0
+    matched_high: int = 0
+    matched_medium: int = 0
+    manual_review: int = 0
+    unmatched: int = 0
+    official_missing: int = 0
+    official_found: int = 0
+    operational_gaps: int = 0
+    total_source_drivers: int = 0
+    total_drivers_in_db: int = 0
+    auto_detectable_reconciliations: int = 0
+    active_conflicts: int = 0
+    aging: dict = {}
+    scouts_with_most_conflicts: List[Any] = []
+
+
+class ReconciliationListItem(BaseModel):
+    observed_id: Optional[int] = None
+    driver_id: Optional[str] = None
+    reported_driver_name: Optional[str] = None
+    reported_scout_name: Optional[str] = None
+    reported_supervisor_name: Optional[str] = None
+    reported_origin: Optional[str] = None
+    reported_license: Optional[str] = None
+    reported_phone: Optional[str] = None
+    match_status: Optional[str] = None
+    match_confidence: Optional[str] = None
+    match_reason: Optional[str] = None
+    official_source_status: Optional[str] = None
+    review_status: Optional[str] = None
+    review_notes: Optional[str] = None
+    reported_affiliation_date: Optional[str] = None
+    observed_created_at: Optional[str] = None
+    classification: Optional[str] = None
+    confidence_level: Optional[str] = None
+    in_official: bool = False
+    has_active_assignment: bool = False
+    has_paid_blocking: bool = False
+    has_cutoff_line: bool = False
+    aging: Optional[str] = None
+
+
+class ReconciliationListResponse(BaseModel):
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+    items: List[ReconciliationListItem] = []
+
+
+class ReconciliationActionRequest(BaseModel):
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+    assign_scout: bool = False
+
+
+class ReconciliationActionResult(BaseModel):
+    observed_id: Optional[int] = None
+    action: Optional[str] = None
+    error: Optional[str] = None
+    before: Any = None
+    after: Any = None
+    assignment_created: bool = False
+    driver_id: Optional[str] = None
+
+
+class DriverTimelineItem(BaseModel):
+    id: Optional[int] = None
+    observed_at: Optional[str] = None
+    reported_scout: Optional[str] = None
+    match_confidence: Optional[str] = None
+    review_status: Optional[str] = None
+    official_source_status: Optional[str] = None
+
+
+class CutoffLineTimelineItem(BaseModel):
+    id: Optional[int] = None
+    cutoff_run_id: Optional[int] = None
+    scout_id: Optional[int] = None
+    attribution_source: Optional[str] = None
+    payment_status: Optional[str] = None
+    calculated_amount: Optional[float] = None
+    line_explanation: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class PaidHistoryTimelineItem(BaseModel):
+    id: Optional[int] = None
+    paid_at: Optional[str] = None
+    amount_paid: Optional[float] = None
+    import_source: Optional[str] = None
+    blocks_future_payment: Optional[bool] = None
+
+
+class AuditTrailItem(BaseModel):
+    id: Optional[int] = None
+    action: Optional[str] = None
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+    reconciliation_status: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class DriverTimelineResponse(BaseModel):
+    driver_id: Optional[str] = None
+    in_official_source: bool = False
+    first_trip_at: Optional[str] = None
+    observed_history: List[DriverTimelineItem] = []
+    cutoff_lines: List[CutoffLineTimelineItem] = []
+    paid_history: List[PaidHistoryTimelineItem] = []
+    audit_trail: List[AuditTrailItem] = []
+
+
+class AutoDetectResponse(BaseModel):
+    observed_id: Optional[int] = None
+    driver_id: Optional[str] = None
+    reported_scout_name: Optional[str] = None
+    reported_driver_name: Optional[str] = None
+    original_official_status: Optional[str] = None
+    now_in_official: bool = False
+    suggested_action: Optional[str] = None
+
+
+class ConflictItem(BaseModel):
+    driver_id: Optional[str] = None
+    classification: Optional[str] = None
+    confidence: Optional[str] = None
+    in_official: bool = False
+    in_observed: bool = False
+    has_active_assignment: bool = False
+    has_paid_blocking: bool = False
+
+
+class IntegrityMetricsResponse(BaseModel):
+    attribution_integrity_pct: float = 0.0
+    missing_attribution_rate: float = 0.0
+    observed_only_count: int = 0
+    official_only_count: int = 0
+    active_conflicts: int = 0
+    auto_detectable: int = 0
+    scouts_with_conflicts: List[Any] = []
+    aging: dict = {}
+    total_observed: int = 0
+    total_validated: int = 0
+    total_rejected: int = 0
