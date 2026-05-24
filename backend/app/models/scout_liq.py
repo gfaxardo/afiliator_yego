@@ -76,6 +76,13 @@ class DriverAssignment(Base):
     source_row = Column(Integer)
     import_batch_id = Column(Integer)
     license_raw = Column(String(100))
+    operational_source_universe = Column(String(50))
+    source_confidence = Column(String(20))
+    payable_source_status = Column(String(50))
+    source_warning = Column(Text)
+    matched_in_drivers = Column(Boolean)
+    matched_in_official_source = Column(Boolean)
+    official_source_origin_tag = Column(String(50))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -156,6 +163,26 @@ class CutoffRun(Base):
     cancelled_at = Column(DateTime, nullable=True)
     cancelled_reason = Column(Text, nullable=True)
     cutoff_mode = Column(String(20), nullable=False, default="COHORT", server_default=text("'COHORT'"))
+    approving_with_source_warnings = Column(Boolean, nullable=True)
+    warning_acknowledged = Column(Boolean, nullable=True)
+    # ── Acquisition Anchor (Fase 2) ──
+    date_basis = Column(String(30), nullable=True,
+                        comment="acquisition_anchor | hire_date_legacy")
+    anchor_summary = Column(Text, nullable=True,
+                            comment="JSON snapshot con KPIs de calidad de anchor")
+    # ── Freeze / Snapshot (Fase 2D) ──
+    frozen_at = Column(DateTime, nullable=True)
+    frozen_by = Column(String(100), nullable=True)
+    snapshot_hash = Column(String(64), nullable=True)
+    snapshot_version = Column(Integer, nullable=True, server_default=text('1'))
+    anchor_model_version = Column(String(20), nullable=True, server_default=text("'2A.3'"))
+    rules_snapshot = Column(Text, nullable=True)
+    totals_snapshot = Column(Text, nullable=True)
+    lines_count_snapshot = Column(Integer, nullable=True)
+    review_started_at = Column(DateTime, nullable=True)
+    review_completed_at = Column(DateTime, nullable=True)
+    exported_at = Column(DateTime, nullable=True)
+    is_stale = Column(Boolean, nullable=False, default=False, server_default=text("false"))
 
     summaries = relationship("CutoffScoutSummary", back_populates="cutoff_run")
     lines = relationship("CutoffDriverLine", back_populates="cutoff_run")
@@ -250,12 +277,39 @@ class CutoffDriverLine(Base):
     calculated_amount = Column(Numeric(10, 2))
     eligible = Column(Boolean, default=True)
     blocked_reason = Column(Text)
+    origin_tag = Column(String(50))
+    operational_source_universe = Column(String(50))
+    source_confidence = Column(String(20))
+    payable_source_status = Column(String(50))
+    official_source_origin_tag = Column(String(50))
+    approving_with_source_warnings = Column(Boolean)
     payment_formula_explanation = Column(Text)
     already_paid = Column(Boolean, default=False)
     attribution_source = Column(String(50), default="official", server_default="official")
     observed_affiliation_id = Column(Integer, nullable=True)
     line_observation_status = Column(String(50), nullable=True)
     line_explanation = Column(Text, nullable=True)
+    # ── Acquisition Anchor (Fase 2) ──
+    acquisition_anchor_date = Column(Date, nullable=True)
+    anchor_source = Column(String(100), nullable=True)
+    anchor_confidence = Column(String(20), nullable=True)
+    acquisition_type = Column(String(50), nullable=True)
+    anchor_warning = Column(Text, nullable=True)
+    reactivation_flag = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    hire_date_reference = Column(Date, nullable=True)
+    days_hire_vs_anchor = Column(Integer, nullable=True)
+    # ── Payment Anchor Guardrails (Fase 2A.2) ──
+    payment_anchor_status = Column(String(50), nullable=True)
+    reported_anchor_date = Column(Date, nullable=True)
+    reported_anchor_source = Column(String(100), nullable=True)
+    reported_anchor_warning = Column(Text, nullable=True)
+    anchor_payment_block_reason = Column(Text, nullable=True)
+    is_auto_payable_anchor = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # ── Anchor Review (Fase 2B) ──
+    anchor_review_status = Column(String(50), nullable=True, server_default=text("'pending_review'"))
+    anchor_reviewed_by = Column(String(100), nullable=True)
+    anchor_reviewed_at = Column(DateTime, nullable=True)
+    anchor_review_reason = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
@@ -720,4 +774,38 @@ class ReconciliationRefreshLog(Base):
     refresh_status = Column(String(20), nullable=False, default="in_progress")
     refresh_error = Column(Text, nullable=True)
     row_count = Column(Integer, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class AnchorReviewAudit(Base):
+    """Audit trail for manual anchor review workflow. Fase 2B."""
+    __tablename__ = "scout_liq_anchor_review_audit"
+    __table_args__ = (
+        Index("ix_ar_audit_line_id", "line_id"),
+        Index("ix_ar_audit_action", "action"),
+        Index("ix_ar_audit_created_at", "created_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    line_id = Column(Integer, nullable=False)
+    action = Column(String(50), nullable=False)
+    actor = Column(String(100), nullable=True)
+    reason = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    reviewed_anchor_date = Column(Date, nullable=True)
+    before_state = Column(Text, nullable=True)
+    after_state = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class UxFeedback(Base):
+    """UX feedback collection for multi-role workflow. Fase 2UX."""
+    __tablename__ = "scout_liq_ux_feedback"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    role = Column(String(50), nullable=True)
+    screen = Column(String(100), nullable=True)
+    message = Column(Text, nullable=True)
+    severity = Column(String(20), nullable=True)
+    created_by = Column(String(100), nullable=True)
     created_at = Column(DateTime, server_default=func.now())

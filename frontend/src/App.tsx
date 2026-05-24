@@ -21,6 +21,8 @@ import ReconciliationView from './components/Liquidador/ReconciliationView'
 import UnifiedLoadView from './components/Liquidador/UnifiedLoadView'
 import CentroCargaView from './components/Liquidador/CentroCargaView'
 import HealthDashboardView from './components/Liquidador/HealthDashboardView'
+import AcquisitionAnchorView from './components/Liquidador/AcquisitionAnchorView'
+import AnchorReviewQueueView from './components/Liquidador/AnchorReviewQueueView'
 import LegacyRedirectView from './components/Liquidador/LegacyRedirectView'
 import PaymentView from './components/Liquidador/PaymentView'
 
@@ -86,6 +88,12 @@ function App() {
           {/* Health */}
           <Route path="health" element={<HealthCheck />} />
           <Route path="salud" element={<HealthDashboardView />} />
+
+          {/* Acquisition Anchor (Fase 1) */}
+          <Route path="anchor" element={<AcquisitionAnchorView />} />
+
+          {/* Anchor Review Queue (Fase 2B) */}
+          <Route path="review-queue" element={<AnchorReviewQueueView />} />
         </Route>
         <Route path="*" element={<Navigate to="/scout-liq" replace />} />
       </Routes>

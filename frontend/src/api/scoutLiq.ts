@@ -1804,3 +1804,157 @@ export async function getPaymentHistoryReport(params?: {
   const { data } = await api.get('/reports/payment-history', { params })
   return data
 }
+
+// ── Acquisition Anchor (Fase 1) ──────────────────────────────────────
+
+export interface AcquisitionAnchorSummary {
+  total: number
+  by_origin: Array<{ origen: string; count: number }>
+  by_anchor_source: Array<{ anchor_source: string; count: number }>
+  by_anchor_confidence: Array<{ anchor_confidence: string; count: number }>
+  by_acquisition_type: Array<{ acquisition_type: string; count: number }>
+  warnings: Array<{ driver_id: string; origen: string; warning: string; anchor_source: string }>
+  warning_count: number
+  cabinet_missing_lca: number
+  cabinet_recovered_lca: number
+  fleet_without_hire_date: number
+  reactivation_count: number
+}
+
+export interface AcquisitionAnchorSample {
+  driver_id: string
+  origen: string
+  acquisition_anchor_date: string | null
+  anchor_source: string
+  anchor_confidence: string
+  acquisition_type: string
+  anchor_warning: string | null
+  reactivation_flag: boolean
+  days_hire_vs_anchor: number | null
+  cabinet_lead_created_at: string | null
+  cabinet_hire_date: string | null
+  drivers_hire_date: string | null
+  leads_lead_created_at: string | null
+}
+
+export interface AcquisitionAnchorSamplesResponse {
+  total_matched_in_window: number
+  limit: number
+  offset: number
+  filters: Record<string, string | null | undefined>
+  samples: AcquisitionAnchorSample[]
+}
+
+export async function getAcquisitionAnchorSummary(): Promise<AcquisitionAnchorSummary> {
+  const { data } = await api.get('/acquisition-anchor/summary')
+  return data
+}
+
+export async function getAcquisitionAnchorSamples(params?: {
+  origen?: string
+  anchor_source?: string
+  acquisition_type?: string
+  anchor_confidence?: string
+  limit?: number
+  offset?: number
+}): Promise<AcquisitionAnchorSamplesResponse> {
+  const { data } = await api.get('/acquisition-anchor/samples', { params })
+  return data
+}
+
+// ── Anchor Review Queue (Fase 2B) ──────────────────────────────────
+
+export interface ReviewQueueItem {
+  line_id: number
+  driver_id: string
+  cutoff_run_id: number
+  scout_id: number
+  origin: string
+  acquisition_anchor_date: string | null
+  hire_date_reference: string | null
+  days_hire_vs_anchor: number | null
+  payment_anchor_status: string | null
+  acquisition_type: string | null
+  anchor_confidence: string | null
+  anchor_source: string | null
+  anchor_warning: string | null
+  reactivation_flag: boolean
+  payout_eligible_flag: boolean
+  line_status: string
+  payment_status: string
+  blocked_reason: string | null
+  anchor_review_status: string
+  anchor_reviewed_by: string | null
+  anchor_reviewed_at: string | null
+  anchor_review_reason: string | null
+  is_auto_payable_anchor: boolean
+  trips_0_7_count: number
+  trips_0_14_count: number
+}
+
+export interface ReviewQueueResponse {
+  total: number
+  limit: number
+  offset: number
+  items: ReviewQueueItem[]
+  tag_counts: Record<string, number>
+  active_filters: { q: string | null; tags: string[] }
+}
+
+export interface ReviewSummary {
+  total_lines: number
+  pending_review: number
+  blocked_anchor: number
+  supervisor_review: number
+  approved_manual: number
+  rejected: number
+  resolved_by_refresh: number
+  weak_anchors: number
+  reactivated_pending: number
+}
+
+export interface ReviewAuditEntry {
+  id: number
+  line_id: number
+  action: string
+  actor: string | null
+  reason: string | null
+  notes: string | null
+  reviewed_anchor_date: string | null
+  before_state: any
+  after_state: any
+  created_at: string | null
+}
+
+export async function getAnchorReviewQueue(params?: {
+  status_filter?: string
+  anchor_status_filter?: string
+  cutoff_run_id?: number
+  origin?: string
+  scout_id?: number
+  limit?: number
+  offset?: number
+  q?: string
+  tags?: string
+}): Promise<ReviewQueueResponse> {
+  const { data } = await api.get('/anchor-review/queue', { params })
+  return data
+}
+
+export async function getAnchorReviewSummary(): Promise<ReviewSummary> {
+  const { data } = await api.get('/anchor-review/summary')
+  return data
+}
+
+export async function getAnchorReviewAudit(lineId: number): Promise<{ line_id: number; audit_entries: ReviewAuditEntry[] }> {
+  const { data } = await api.get(`/anchor-review/audit/${lineId}`)
+  return data
+}
+
+export async function performAnchorReview(
+  lineId: number,
+  body: { action: string; actor?: string; reason?: string; notes?: string; reviewed_anchor_date?: string }
+): Promise<any> {
+  const { data } = await api.post(`/anchor-review/${lineId}/action`, body)
+  return data
+}

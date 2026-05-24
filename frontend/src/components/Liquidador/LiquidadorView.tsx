@@ -6,11 +6,12 @@ import {
   getCutoffExportFinancialUrl, getOperationFilters,
 } from '../../api/scoutLiq'
 import type { SchemeResponse } from '../../api/scoutLiq'
+import { AcquisitionBadge, AnchorBadgeStack } from './AcquisitionBadges'
 
 interface QualityContract { status: string; can_compute_trip_counts: boolean; uses_legacy_booleans_for_payment: boolean; sample_driver_trip_count: any; errors: string[] }
 interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string; cohort_iso_week?: string; cohort_from?: string; cohort_to?: string; maturity_days?: number; scheme_name?: string; scheme_type?: string; version_name?: string; min_activated?: number; activation_rule?: string; quality_rule?: string; snapshot_locked_at?: string; config_snapshot?: any; cutoff_mode?: string }
 interface Summary { id: number; scout_id: number; scout_name: string; origin: string; total_affiliations: number; total_activated: number; drivers_1plus_0_7: number; drivers_5plus_0_7: number; drivers_1plus_8_14: number; drivers_5plus_0_14: number; total_converted_5v14d: number; not_converted: number; conversion_rate: number; conversion_rate_5v7d: number; conversion_5plus_0_7_rate: number; tier_reached: number; payment_per_converted_driver: number; payout_per_activated: number; amount_calculated: number; total_payable: number; status: string; blocked_reason: string; metric_used: string }
-interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string; payment_formula_explanation?: string; attribution_source?: string; observed_affiliation_id?: number; line_observation_status?: string; line_explanation?: string }
+interface DriverLine { id: number; scout_id: number; driver_id: string; hire_date: string; origin: string; trips_0_7_count: number; trips_8_14_count: number; trips_0_14_count: number; total_orders: number; legacy_viajes_0_7_flag: boolean; legacy_viajes_8_14_flag: boolean; activated_flag: boolean; is_converted_5trips_7d: boolean; is_converted_5trips_14d: boolean; driver_lifecycle_status: string; line_status: string; payment_status: string; blocked_reason: string; eligible: boolean; already_paid: boolean; payout_eligible_flag: boolean; calculated_amount: number; payment_rule: string; source_quality_status: string; payment_formula_explanation?: string; attribution_source?: string; observed_affiliation_id?: number; line_observation_status?: string; line_explanation?: string; acquisition_anchor_date?: string; anchor_source?: string; anchor_confidence?: string; acquisition_type?: string; anchor_warning?: string; reactivation_flag?: boolean; hire_date_reference?: string; days_hire_vs_anchor?: number; payment_anchor_status?: string; is_auto_payable_anchor?: boolean; anchor_payment_block_reason?: string }
 
 // ── Derived display helpers (PRESENTATIONAL – no business logic) ──
 
@@ -182,6 +183,7 @@ export default function LiquidadorView() {
   const [filterLifecycle, setFilterLifecycle] = useState('')
   const [filterPayment, setFilterPayment] = useState('')
   const [filterOrigin, setFilterOrigin] = useState('')
+  const [filterAnchor, setFilterAnchor] = useState('')  // Fase 2A.3
 
   // Create form
   const [formName, setFormName] = useState('Corte ' + new Date().toISOString().slice(0, 10))
@@ -224,7 +226,7 @@ export default function LiquidadorView() {
   }
 
   const clearLineFilters = () => {
-    setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin('')
+    setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin(''); setFilterAnchor('')
     setSelectedScoutId(null)
   }
 
@@ -239,6 +241,12 @@ export default function LiquidadorView() {
     else if (preset === 'paid') setFilterLifecycle('paid')
     else if (preset === 'blocked') setFilterPayment('blocked')
     else if (preset === 'observed') setFilterLifecycle('observed')
+    // Fase 2A.3: anchor presets
+    else if (preset === 'reactivated') setFilterAnchor('reactivated')
+    else if (preset === 'fleet_anchor') setFilterAnchor('fleet')
+    else if (preset === 'fallback_anchor') setFilterAnchor('fallback')
+    else if (preset === 'weak_anchor') setFilterAnchor('weak')
+    else if (preset === 'blocked_anchor') setFilterAnchor('blocked')
   }
 
   // Client-side filtered lines
@@ -248,6 +256,12 @@ export default function LiquidadorView() {
     if (filterLifecycle && deriveDisplayLifecycle(l) !== filterLifecycle) return false
     if (filterPayment && l.payment_status !== filterPayment) return false
     if (filterOrigin && l.origin !== filterOrigin) return false
+    // Fase 2A.3: anchor filters
+    if (filterAnchor === 'reactivated') return l.reactivation_flag
+    if (filterAnchor === 'fleet') return l.acquisition_type === 'fleet_migration'
+    if (filterAnchor === 'fallback') return l.anchor_confidence === 'medium' && l.acquisition_type !== 'fleet_migration'
+    if (filterAnchor === 'weak') return l.anchor_confidence === 'weak'
+    if (filterAnchor === 'blocked') return l.payment_anchor_status === 'blocked_missing_official_anchor'
     return true
   })
 
@@ -534,6 +548,22 @@ export default function LiquidadorView() {
         </div>
       )}
 
+      {/* ── Anchor Quality Summary Cards (Fase 2A.3) ── */}
+      {selectedCutoff && lines.length > 0 && (
+        <div className="mb-3">
+          <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
+            <AnchorStatCard label="Total" value={lines.length} />
+            <AnchorStatCard label="Pagables" value={lines.filter(l => l.is_auto_payable_anchor).length} color="green" />
+            <AnchorStatCard label="Block Anchor" value={lines.filter(l => l.payment_anchor_status === 'blocked_missing_official_anchor').length} color="red" alert />
+            <AnchorStatCard label="Reactivados" value={lines.filter(l => l.reactivation_flag).length} color="orange" alert />
+            <AnchorStatCard label="Fleet" value={lines.filter(l => l.acquisition_type === 'fleet_migration').length} color="blue" />
+            <AnchorStatCard label="Fallback" value={lines.filter(l => l.anchor_confidence === 'medium' && l.acquisition_type !== 'fleet_migration').length} color="yellow" />
+            <AnchorStatCard label="Weak" value={lines.filter(l => l.anchor_confidence === 'weak').length} color="red" />
+            <AnchorStatCard label="Gap >30d" value={lines.filter(l => l.days_hire_vs_anchor && Math.abs(l.days_hire_vs_anchor) > 30).length} color="amber" alert />
+          </div>
+        </div>
+      )}
+
       {/* Lines detail — enhanced operational view */}
       {selectedCutoff && lines.length > 0 && (
         <div>
@@ -565,6 +595,26 @@ export default function LiquidadorView() {
                   (filterLifecycle === p.key || (p.key === 'blocked' && filterPayment === 'blocked') || (p.key === 'observed' && filterLifecycle === 'observed'))
                     ? `${p.color} bg-opacity-20`
                     : `bg-white ${p.color}`
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {/* Anchor presets (Fase 2A.3) */}
+          <div className="flex flex-wrap gap-1 mb-2">
+            {[
+              { key: 'reactivated', label: 'Reactivados', color: 'border-orange-300 text-orange-600 hover:bg-orange-50' },
+              { key: 'fleet_anchor', label: 'Fleet', color: 'border-blue-300 text-blue-600 hover:bg-blue-50' },
+              { key: 'fallback_anchor', label: 'Fallback', color: 'border-yellow-300 text-yellow-600 hover:bg-yellow-50' },
+              { key: 'weak_anchor', label: 'Weak', color: 'border-red-200 text-red-500 hover:bg-red-50' },
+              { key: 'blocked_anchor', label: 'Block Anchor', color: 'border-red-400 text-red-700 hover:bg-red-100' },
+            ].map(p => (
+              <button
+                key={p.key}
+                onClick={() => applyPreset(p.key)}
+                className={`px-2 py-0.5 text-[10px] font-medium border rounded transition-colors ${
+                  filterAnchor === p.key ? `${p.color} bg-opacity-20` : `bg-white ${p.color}`
                 }`}
               >
                 {p.label}
@@ -615,18 +665,18 @@ export default function LiquidadorView() {
             )}
           </div>
 
-          {/* Grid */}
+           {/* Grid */}
           <div className="bg-white border rounded-lg overflow-x-auto max-h-[60vh] overflow-y-auto">
             <table className="w-full text-xs">
               <thead className="bg-gray-50 sticky top-0 border-b z-10"><tr>
-                <th className="text-left p-2">Fuente</th>
+                <th className="text-left p-2">Anchor</th>
                 <th className="text-left p-2">Progreso</th>
                 <th className="text-left p-2">Driver ID</th>
-                <th className="text-left p-2">Hire</th>
+                <th className="text-left p-2">Hire Ref</th>
                 <th className="text-left p-2">Origen</th>
                 <th className="text-center p-2 w-10">7d</th>
                 <th className="text-center p-2 w-10">14d</th>
-                <th className="text-left p-2">Ciclo</th>
+                <th className="text-center p-2 w-10">Gap</th>
                 <th className="text-left p-2">Pago</th>
                 <th className="text-left p-2">Motivo</th>
                 <th className="text-right p-2">S/</th>
@@ -634,15 +684,26 @@ export default function LiquidadorView() {
               <tbody className="divide-y divide-gray-50">
                 {filteredLines.map(l => {
                   const lifecycle = deriveDisplayLifecycle(l)
+                  const isReactivated = l.reactivation_flag
+                  const isBlocked = l.payment_anchor_status === 'blocked_missing_official_anchor'
+                  const isWeak = l.anchor_confidence === 'weak'
+                  const rowBg = isBlocked ? 'bg-red-50/30' : isReactivated ? 'bg-orange-50/30' : ''
                   return (
-                    <tr key={l.id} className="hover:bg-blue-50/30 transition-colors">
+                    <tr key={l.id} className={`hover:bg-blue-50/30 transition-colors ${rowBg}`}>
                       <td className="p-1.5">
-                        <AttributionBadge source={l.attribution_source} />
-                        {l.observed_affiliation_id && (
-                          <div className="text-[9px] text-gray-400" title={l.line_explanation || ''}>
-                            {l.line_observation_status || 'observado'}
+                        <div className="space-y-0.5">
+                          <div className="text-[11px] font-mono font-medium text-gray-800">
+                            {l.acquisition_anchor_date?.slice(0, 10) || l.hire_date || '-'}
                           </div>
-                        )}
+                          <AnchorBadgeStack
+                            acquisitionType={l.acquisition_type}
+                            reactivationFlag={l.reactivation_flag}
+                            anchorConfidence={l.anchor_confidence}
+                            isAutoPayable={l.is_auto_payable_anchor}
+                            paymentAnchorStatus={l.payment_anchor_status}
+                            daysHireVsAnchor={l.days_hire_vs_anchor}
+                          />
+                        </div>
                       </td>
                       <td className="p-1.5">
                         <ProgressIcons line={l} />
@@ -650,8 +711,17 @@ export default function LiquidadorView() {
                       <td className="p-2 font-mono text-[11px] max-w-[110px] truncate" title={l.driver_id}>
                         {l.driver_id ? l.driver_id.substring(0, 14) + (l.driver_id.length > 14 ? '...' : '') : '-'}
                       </td>
-                      <td className="p-2 text-[11px] whitespace-nowrap text-gray-500">
-                        {l.hire_date || '-'}
+                      <td className="p-2 text-[10px] whitespace-nowrap">
+                        <div>
+                          <span className="text-gray-500">
+                            {l.hire_date_reference || l.hire_date || '-'}
+                          </span>
+                          {l.hire_date_reference && l.acquisition_anchor_date && l.hire_date_reference !== l.acquisition_anchor_date?.slice(0, 10) && (
+                            <span className="text-[9px] text-amber-600 ml-1" title="Difiere del anchor">
+                              ≠
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="p-2 text-[11px] text-gray-600 whitespace-nowrap">
                         {l.origin || '-'}
@@ -662,8 +732,12 @@ export default function LiquidadorView() {
                       <td className="p-2 text-center font-mono text-[11px]">
                         {l.trips_0_14_count ?? 0}
                       </td>
-                      <td className="p-1.5">
-                        <LifecycleBadge status={lifecycle} />
+                      <td className="p-2 text-center font-mono text-[10px]">
+                        {l.days_hire_vs_anchor != null ? (
+                          <span className={l.days_hire_vs_anchor < 0 ? 'text-orange-600' : 'text-gray-500'}>
+                            {l.days_hire_vs_anchor < 0 ? l.days_hire_vs_anchor : (l.days_hire_vs_anchor > 0 ? `+${l.days_hire_vs_anchor}` : '0')}
+                          </span>
+                        ) : '-'}
                       </td>
                       <td className="p-1.5">
                         <PaymentBadge
@@ -677,7 +751,10 @@ export default function LiquidadorView() {
                           className="cursor-help truncate block"
                           title={l.payment_formula_explanation || l.blocked_reason || l.payment_rule || ''}
                         >
-                          {l.payment_formula_explanation || l.blocked_reason || l.payment_rule || '-'}
+                          {l.anchor_payment_block_reason
+                            ? <span className="text-red-600">{l.anchor_payment_block_reason}</span>
+                            : (l.payment_formula_explanation || l.blocked_reason || l.payment_rule || '-')
+                          }
                         </span>
                       </td>
                       <td className="p-2 text-right font-mono text-[11px] font-medium whitespace-nowrap">
@@ -694,6 +771,24 @@ export default function LiquidadorView() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function AnchorStatCard({ label, value, color = 'gray', alert }: { label: string; value: number; color?: string; alert?: boolean }) {
+  const colors: Record<string, string> = {
+    green: 'border-green-200 bg-green-50 text-green-800',
+    red: 'border-red-200 bg-red-50 text-red-800',
+    orange: 'border-orange-200 bg-orange-50 text-orange-800',
+    yellow: 'border-yellow-200 bg-yellow-50 text-yellow-800',
+    blue: 'border-blue-200 bg-blue-50 text-blue-800',
+    amber: 'border-amber-200 bg-amber-50 text-amber-800',
+    gray: 'border-gray-200 bg-white text-gray-700',
+  }
+  return (
+    <div className={`rounded border px-3 py-2 text-center ${colors[color] || colors.gray} ${alert ? 'ring-1 ring-red-200' : ''}`}>
+      <div className="text-[10px] uppercase tracking-wider opacity-60">{label}</div>
+      <div className="text-lg font-bold">{value}</div>
     </div>
   )
 }

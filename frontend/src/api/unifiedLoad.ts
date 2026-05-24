@@ -13,6 +13,8 @@ export interface UnifiedPreviewLine {
   pagado: string
   monto_pagado: number
   fecha_pago: string
+  fecha_atribucion?: string
+  tipo_evento?: string
   status: string
   errors: string[]
   warnings: string[]
@@ -49,13 +51,15 @@ export type UnifiedApplyAction =
   | 'no_change'
   | 'already_paid'
   | 'driver_not_found'
+  | 'driver_not_found_observed_saved'
+  | 'driver_not_found_observed_existing'
   | 'scout_not_found'
   | 'duplicate_existing'
   | 'conflict_existing_active_scout'
   | 'error'
   | 'validation_error'
 
-export type UnifiedApplyLineStatus = 'ok' | 'warning' | 'manual_review' | 'error'
+export type UnifiedApplyLineStatus = 'ok' | 'warning' | 'observed' | 'manual_review' | 'error'
 
 export interface UnifiedApplyLine {
   source_row?: number
@@ -71,6 +75,26 @@ export interface UnifiedApplyLine {
   message: string
   what_happened?: string[]
   error_code?: string | null
+  observed_affiliation_created?: boolean
+  observed_affiliation_id?: number | null
+  observed_affiliation_status?: string
+  assignment_created?: boolean
+  payment_created?: boolean
+  eligible_for_cutoff?: boolean
+  reconciliation_status?: string | null
+  driver_operational_state?: string | null
+  // Parity truth source (from backend streaming)
+  parity_status?: string
+  parity_explanation?: string
+  system_confidence_level?: string
+  operational_readiness?: string
+  next_action?: string
+  driver_resolution_status?: string
+  assignment_status?: string
+  payment_history_status?: string
+  applied_entities?: string
+  skipped_entities?: string
+  rejected_entities?: string
 }
 
 export interface UnifiedApplySummary {
@@ -84,6 +108,9 @@ export interface UnifiedApplySummary {
   already_paid: number
   not_found: number
   errors: number
+  observed_created?: number
+  observed_existing?: number
+  rejected_no_evidence?: number
   commit_ok: boolean
   commit_error?: string | null
   done?: boolean
@@ -98,6 +125,12 @@ export interface UnifiedApplyDetail {
   scout_name?: string | null
   payment_created: boolean
   assignment_created: boolean
+  observed_affiliation_created?: boolean | null
+  observed_affiliation_id?: number | null
+  observed_affiliation_status?: string | null
+  eligible_for_cutoff?: boolean | null
+  reconciliation_status?: string | null
+  driver_operational_state?: string | null
   what_happened?: string[] | null
   action_requested?: string | null
   action_executed?: string | null
@@ -113,6 +146,9 @@ export interface UnifiedApplyResponse {
   conflicts?: number
   already_paid?: number
   not_found?: number
+  observed_created?: number
+  observed_existing?: number
+  rejected_no_evidence?: number
   details: UnifiedApplyDetail[]
   assignments_new: number
   assignments_existing: number
@@ -256,6 +292,19 @@ export function parseApplyLine(raw: any): UnifiedApplyLine {
     message: raw.message ?? (raw.what_happened || []).join(' | ') ?? '',
     what_happened: raw.what_happened ?? [],
     error_code: raw.error_code ?? null,
+    // Parity fields from backend truth source
+    parity_status: raw.parity_status ?? undefined,
+    parity_explanation: raw.parity_explanation ?? undefined,
+    system_confidence_level: raw.system_confidence_level ?? undefined,
+    operational_readiness: raw.operational_readiness ?? undefined,
+    next_action: raw.next_action ?? undefined,
+    driver_resolution_status: raw.driver_resolution_status ?? undefined,
+    assignment_status: raw.assignment_status ?? undefined,
+    payment_history_status: raw.payment_history_status ?? undefined,
+    observed_affiliation_status: raw.observed_affiliation_status ?? undefined,
+    applied_entities: raw.applied_entities ?? undefined,
+    skipped_entities: raw.skipped_entities ?? undefined,
+    rejected_entities: raw.rejected_entities ?? undefined,
   }
 }
 

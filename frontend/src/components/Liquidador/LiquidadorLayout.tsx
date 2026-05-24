@@ -8,6 +8,8 @@ const MAIN_TABS = [
   { to: '/scout-liq/centro-carga', label: 'Centro de Carga' },
   { to: '/scout-liq/configuracion', label: 'Configuracion' },
   { to: '/scout-liq/dashboard', label: 'Dashboard' },
+  { to: '/scout-liq/anchor', label: 'Anchor' },
+  { to: '/scout-liq/review-queue', label: 'Review' },
   { to: '/scout-liq/salud', label: 'Salud' },
 ]
 

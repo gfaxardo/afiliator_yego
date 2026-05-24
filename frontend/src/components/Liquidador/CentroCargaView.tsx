@@ -43,6 +43,8 @@ const APPLY_ACTION_LABEL: Record<string, string> = {
   no_change: 'Sin cambios',
   already_paid: 'Ya pagado',
   driver_not_found: 'Driver no encontrado',
+  driver_not_found_observed_saved: 'Observado guardado',
+  driver_not_found_observed_existing: 'Observado existente',
   scout_not_found: 'Scout no encontrado',
   duplicate_existing: 'Duplicado',
   conflict_existing_active_scout: 'Conflicto de scout',
@@ -57,6 +59,8 @@ const APPLY_ACTION_COLOR: Record<string, string> = {
   no_change: 'bg-gray-100 text-gray-500',
   already_paid: 'bg-yellow-100 text-yellow-700',
   driver_not_found: 'bg-orange-100 text-orange-700',
+  driver_not_found_observed_saved: 'bg-teal-100 text-teal-700',
+  driver_not_found_observed_existing: 'bg-teal-50 text-teal-600',
   scout_not_found: 'bg-orange-100 text-orange-700',
   duplicate_existing: 'bg-gray-100 text-gray-500',
   conflict_existing_active_scout: 'bg-red-100 text-red-700',
@@ -65,6 +69,95 @@ const APPLY_ACTION_COLOR: Record<string, string> = {
 }
 
 type ApplyFinalState = 'GUARDADO' | 'GUARDADO_OBS' | 'SIN_CAMBIOS' | 'REQUIERE_REVISION' | 'NO_GUARDADO'
+
+type ParityStatus = 'full_applied' | 'already_reflected' | 'partial_applied' |
+  'observed_pending' | 'rejected_unusable' | 'no_change' | 'manual_review' | 'unknown'
+
+type OperationalReadiness = 'ready_for_cutoff' | 'pending_reconciliation' | 'needs_fix' |
+  'human_review' | 'no_action_needed' | 'not_eligible'
+
+function computeParity(al: UnifiedApplyLine): { parity: ParityStatus; readiness: OperationalReadiness; confidence: string; explanation: string } {
+  // Truth source: use backend parity fields when available
+  const pStatus = (al.parity_status || '') as ParityStatus
+  const readiness = (al.operational_readiness || 'not_eligible') as OperationalReadiness
+  const confidence = al.system_confidence_level || 'unknown'
+  const explanation = al.parity_explanation || ''
+
+  if (pStatus && ['full_applied', 'already_reflected', 'partial_applied', 'observed_pending', 'rejected_unusable', 'no_change', 'manual_review'].includes(pStatus)) {
+    return { parity: pStatus, readiness, confidence, explanation }
+  }
+
+  // Fallback: compute from action (legacy)
+  const action = al.action ?? ''
+  if (action === 'created_assignment' || action === 'reactivated_assignment') {
+    return { parity: 'full_applied', readiness: 'ready_for_cutoff', confidence: 'high', explanation: 'Atribucion aplicada.' }
+  }
+  if (action === 'created_payment_history') {
+    return { parity: 'partial_applied', readiness: 'needs_fix', confidence: 'low', explanation: 'Pago creado.' }
+  }
+  if (action === 'driver_not_found_observed_saved' || action === 'driver_not_found_observed_existing') {
+    return { parity: 'observed_pending', readiness: 'pending_reconciliation', confidence: 'medium', explanation: 'Driver no encontrado. Reporte guardado como observado.' }
+  }
+  if (action === 'already_paid' || action === 'no_change') {
+    return { parity: 'already_reflected', readiness: 'no_action_needed', confidence: 'high', explanation: 'Ya reflejado.' }
+  }
+  if (action === 'duplicate_existing') {
+    return { parity: 'no_change', readiness: 'no_action_needed', confidence: 'high', explanation: 'Duplicado.' }
+  }
+  if (action === 'driver_not_found') {
+    return { parity: 'rejected_unusable', readiness: 'not_eligible', confidence: 'none', explanation: 'Driver no encontrado.' }
+  }
+  if (action === 'conflict_existing_active_scout') {
+    return { parity: 'manual_review', readiness: 'human_review', confidence: 'low', explanation: 'Conflicto de asignacion.' }
+  }
+  if (action === 'error' || action === 'validation_error') {
+    return { parity: 'rejected_unusable', readiness: 'not_eligible', confidence: 'none', explanation: 'Error de validacion.' }
+  }
+  return { parity: 'unknown', readiness: 'not_eligible', confidence: 'unknown', explanation: 'Desconocido.' }
+}
+
+const PARITY_LABEL: Record<string, string> = {
+  full_applied: 'Aplicado',
+  already_reflected: 'Ya reflejado',
+  partial_applied: 'Parcial',
+  observed_pending: 'Observado pendiente',
+  rejected_unusable: 'Rechazado',
+  no_change: 'Sin cambios',
+  manual_review: 'Revisión humana',
+  unknown: 'Desconocido',
+}
+
+const PARITY_COLOR: Record<string, string> = {
+  full_applied: 'bg-green-100 text-green-700',
+  already_reflected: 'bg-blue-100 text-blue-700',
+  partial_applied: 'bg-yellow-100 text-yellow-700',
+  observed_pending: 'bg-teal-100 text-teal-700',
+  rejected_unusable: 'bg-red-100 text-red-700',
+  no_change: 'bg-gray-100 text-gray-500',
+  manual_review: 'bg-orange-100 text-orange-700',
+  unknown: 'bg-gray-100 text-gray-400',
+}
+
+const READINESS_LABEL: Record<string, string> = {
+  ready_for_cutoff: 'Listo para corte',
+  pending_reconciliation: 'Pendiente reconciliación',
+  needs_fix: 'Necesita corrección',
+  human_review: 'Revisión humana',
+  no_action_needed: 'Sin acción',
+  not_eligible: 'No elegible',
+}
+
+const OP_UNIVERSE_LABEL: Record<string, string> = {
+  official_source_match: 'Fuente oficial validada',
+  driver_found_not_official_source: 'Driver fuera de fuente oficial',
+  observed_no_official_source: 'Observado sin fuente oficial',
+}
+
+const OP_UNIVERSE_COLOR: Record<string, string> = {
+  official_source_match: 'bg-green-100 text-green-700',
+  driver_found_not_official_source: 'bg-amber-100 text-amber-700',
+  observed_no_official_source: 'bg-gray-100 text-gray-600',
+}
 
 const RECON_STATUS_LABELS: Record<string, string> = {
   ok: 'OK', amount_mismatch: 'Diferencia Monto', already_paid: 'Ya Pagado',
@@ -84,14 +177,14 @@ function escapeCsvField(val: any): string {
   let s = String(val)
   // CSV injection prevention: prepend apostrophe if starts with = + - @
   if (/^[=+\-@]/.test(s)) s = "'" + s
-  if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+  if (s.includes(';') || s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
     s = '"' + s.replace(/"/g, '""') + '"'
   }
   return s
 }
 
 function makeCsvLine(fields: any[]): string {
-  return fields.map(escapeCsvField).join(',')
+  return fields.map(escapeCsvField).join(';')
 }
 
 function buildTimestamp(): string {
@@ -127,6 +220,7 @@ function generateFullAuditCsv(
   const header = [
     // Original columns from input file
     'source_row', 'licencia', 'scout', 'supervisor', 'pagado', 'monto_pagado', 'fecha_pago',
+    'fecha_atribucion', 'tipo_evento',
     'observacion', 'driver_id', 'nombre_conductor', 'origen', 'tipo_scout', 'motivo_pago',
     'cohorte_iso',
     // Audit columns
@@ -492,11 +586,43 @@ export default function CentroCargaView() {
     return groups
   }, [applyLines])
 
+  // Parity computation from apply lines
+  const applyParity = useMemo(() => {
+    const counts: Record<ParityStatus, number> = { full_applied: 0, already_reflected: 0, partial_applied: 0, observed_pending: 0, rejected_unusable: 0, no_change: 0, manual_review: 0, unknown: 0 }
+    const readinessCounts: Record<OperationalReadiness, number> = { ready_for_cutoff: 0, pending_reconciliation: 0, needs_fix: 0, human_review: 0, no_action_needed: 0, not_eligible: 0 }
+    const items: Array<UnifiedApplyLine & { parity: ParityStatus; readiness: OperationalReadiness; confidence: string; explanation: string }> = []
+    for (const l of applyLines) {
+      const p = computeParity(l)
+      counts[p.parity] = (counts[p.parity] || 0) + 1
+      readinessCounts[p.readiness] = (readinessCounts[p.readiness] || 0) + 1
+      items.push({ ...l, ...p })
+    }
+    const total = applyLines.length
+    const operationalParityRate = total > 0 ? ((counts.full_applied + counts.already_reflected + counts.no_change) / total * 100).toFixed(1) : '0.0'
+    const reconciliationGapRate = total > 0 ? ((counts.observed_pending + counts.manual_review + counts.partial_applied) / total * 100).toFixed(1) : '0.0'
+    const rejectedRate = total > 0 ? (counts.rejected_unusable / total * 100).toFixed(1) : '0.0'
+    return { counts, readinessCounts, items, total, operationalParityRate, reconciliationGapRate, rejectedRate }
+  }, [applyLines])
+
   const filteredApplyLines = useMemo(() => {
     if (applyActionFilter === 'all') return applyLines
     if (applyActionFilter === 'issues') return applyLines.filter(l => l.action === 'error' || l.action === 'conflict_existing_active_scout')
+    // Parity-based filters
+    const parityKeys: ParityStatus[] = ['full_applied', 'already_reflected', 'partial_applied', 'observed_pending', 'rejected_unusable', 'no_change', 'manual_review']
+    if (parityKeys.includes(applyActionFilter as ParityStatus)) {
+      return applyParity.items.filter(l => l.parity === applyActionFilter)
+    }
     return applyLines.filter(l => l.action === applyActionFilter)
-  }, [applyLines, applyActionFilter])
+  }, [applyLines, applyActionFilter, applyParity.items])
+
+  // Quick parity lookup by source_row
+  const parityByRow = useMemo(() => {
+    const m = new Map<number, ReturnType<typeof computeParity>>()
+    for (const item of applyParity.items) {
+      m.set(item.source_row ?? 0, item)
+    }
+    return m
+  }, [applyParity.items])
 
   // ── Contraste: Exportar estado sistema ──
   const handleExportSystemState = useCallback(async () => {
@@ -800,7 +926,51 @@ export default function CentroCargaView() {
               )
             })()}
 
-            {/* Cards resumen */}
+            {/* Parity Summary Cards */}
+            <div className="space-y-2">
+              <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Resumen de Paridad vs Sheets</div>
+              <div className="grid grid-cols-3 md:grid-cols-7 gap-2">
+                <MiniStat label="Aplicados" value={applyParity.counts.full_applied} color="green" />
+                <MiniStat label="Ya reflejados" value={applyParity.counts.already_reflected} color="blue" />
+                <MiniStat label="Observados pend." value={applyParity.counts.observed_pending} color="teal" />
+                <MiniStat label="Parciales" value={applyParity.counts.partial_applied} color="yellow" />
+                <MiniStat label="Revisión humana" value={applyParity.counts.manual_review} color="orange" />
+                <MiniStat label="Rechazados" value={applyParity.counts.rejected_unusable} color="red" />
+                <MiniStat label="Sin cambios" value={applyParity.counts.no_change} color="gray" />
+              </div>
+              {/* KPIs */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-white border rounded p-2 text-center">
+                  <div className="text-[10px] text-gray-500">Cobertura operativa</div>
+                  <div className="text-lg font-bold text-green-600">{applyParity.operationalParityRate}%</div>
+                  <div className="text-[9px] text-gray-400">{applyParity.counts.full_applied + applyParity.counts.already_reflected + applyParity.counts.no_change}/{applyParity.total} filas</div>
+                </div>
+                <div className="bg-white border rounded p-2 text-center">
+                  <div className="text-[10px] text-gray-500">Brecha de reconciliación</div>
+                  <div className="text-lg font-bold text-amber-600">{applyParity.reconciliationGapRate}%</div>
+                  <div className="text-[9px] text-gray-400">{applyParity.counts.observed_pending + applyParity.counts.manual_review + applyParity.counts.partial_applied}/{applyParity.total} filas</div>
+                </div>
+                <div className="bg-white border rounded p-2 text-center">
+                  <div className="text-[10px] text-gray-500">Tasa de rechazo</div>
+                  <div className="text-lg font-bold text-red-600">{applyParity.rejectedRate}%</div>
+                  <div className="text-[9px] text-gray-400">{applyParity.counts.rejected_unusable}/{applyParity.total} filas</div>
+                </div>
+              </div>
+              {/* Readiness summary */}
+              <details className="text-xs">
+                <summary className="cursor-pointer text-gray-500 hover:text-gray-700 font-medium">Preparación operativa</summary>
+                <div className="grid grid-cols-3 gap-1 mt-1">
+                  {(['ready_for_cutoff', 'pending_reconciliation', 'needs_fix', 'human_review', 'no_action_needed', 'not_eligible'] as OperationalReadiness[]).map(r => (
+                    <div key={r} className="flex justify-between bg-gray-50 rounded px-2 py-1 text-[10px]">
+                      <span className="text-gray-600">{READINESS_LABEL[r] || r}</span>
+                      <span className="font-mono font-medium">{applyParity.readinessCounts[r] || 0}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            </div>
+
+            {/* Mini cards resumen (legacy) */}
             <div className="grid grid-cols-3 md:grid-cols-7 gap-2">
               <MiniStat label="Aplicadas" value={applySummary.applied} color="green" />
               <MiniStat label="Sin cambios" value={applySummary.no_change} color="gray" />
@@ -811,18 +981,39 @@ export default function CentroCargaView() {
               <MiniStat label="Total filas" value={applySummary.total_rows ?? applyLines.length} color="gray" />
             </div>
 
-            {/* Filtros rapidos */}
+            {/* Filtros por estado de paridad */}
             <div className="flex flex-wrap gap-1">
+              <button onClick={() => setApplyActionFilter('all')}
+                className={`px-2 py-0.5 text-[10px] rounded-full border transition-colors ${
+                  applyActionFilter === 'all' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-300 hover:border-gray-400'
+                }`}>Todas ({applyParity.total})</button>
+              {(['full_applied', 'already_reflected', 'no_change', 'observed_pending', 'partial_applied', 'manual_review', 'rejected_unusable'] as ParityStatus[]).map(ps => {
+                const count = applyParity.counts[ps] || 0
+                if (count === 0) return null
+                return (
+                  <button key={ps} onClick={() => setApplyActionFilter(ps)}
+                    className={`px-2 py-0.5 text-[10px] rounded-full border transition-colors ${
+                      applyActionFilter === ps ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-300 hover:border-gray-400'
+                    }`}>
+                    <span className={`inline-block w-2 h-2 rounded-full mr-1 ${(PARITY_COLOR[ps] || 'bg-gray-200').split(' ')[0]}`} />
+                    {PARITY_LABEL[ps] || ps} ({count})
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Filtros legacy por accion */}
+            <details className="text-xs">
+              <summary className="cursor-pointer text-gray-400 hover:text-gray-600">Filtros por acción</summary>
+              <div className="flex flex-wrap gap-1 mt-1">
               {[
-                { key: 'all', label: 'Todas' },
                 { key: 'issues', label: 'Con problemas' },
                 { key: 'created_assignment', label: 'Creadas' },
-                { key: 'created_payment_history', label: 'Pagos creados' },
+                { key: 'created_payment_history', label: 'Pagos' },
                 { key: 'no_change', label: 'Sin cambios' },
                 { key: 'already_paid', label: 'Ya pagados' },
                 { key: 'driver_not_found', label: 'No encontrados' },
-                { key: 'duplicate_existing', label: 'Duplicados' },
-                { key: 'conflict_existing_active_scout', label: 'Conflictos' },
+                { key: 'driver_not_found_observed_saved', label: 'Observados' },
                 { key: 'error', label: 'Errores' },
               ].map(({ key, label }) => (
                 <button key={key} onClick={() => setApplyActionFilter(key)}
@@ -834,7 +1025,8 @@ export default function CentroCargaView() {
                   {label}
                 </button>
               ))}
-            </div>
+              </div>
+            </details>
 
             {/* Tabla detalle */}
             {filteredApplyLines.length > 0 && (
@@ -846,15 +1038,19 @@ export default function CentroCargaView() {
                       <th className="text-left px-2 py-1.5">Driver</th>
                       <th className="text-left px-2 py-1.5">Scout</th>
                       <th className="text-left px-2 py-1.5">Accion</th>
+                      <th className="text-left px-2 py-1.5">Paridad</th>
+                      <th className="text-left px-2 py-1.5">Próx. paso</th>
                       <th className="text-center px-2 py-1.5 w-16">Guardado</th>
-                      <th className="text-left px-2 py-1.5">Mensaje</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredApplyLines.slice(0, 100).map((l, i) => (
+                    {filteredApplyLines.slice(0, 100).map((l, i) => {
+                      const parity = parityByRow.get(l.source_row ?? 0)
+                      return (
                       <tr key={i} className={
                         l.status === 'error' ? 'bg-red-50' :
                         l.status === 'warning' ? 'bg-yellow-50' :
+                        l.status === 'observed' ? 'bg-teal-50' :
                         l.action === 'no_change' || l.action === 'duplicate_existing' ? 'bg-gray-50' :
                         ''
                       }>
@@ -866,19 +1062,29 @@ export default function CentroCargaView() {
                             {APPLY_ACTION_LABEL[l.action] || l.action}
                           </span>
                         </td>
+                        <td className="px-2 py-1.5" title={parity?.explanation || ''}>
+                          {parity ? (
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${PARITY_COLOR[parity.parity] || 'bg-gray-100'}`}>
+                              {PARITY_LABEL[parity.parity] || parity.parity}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400 text-[9px]">-</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 text-[9px] text-gray-500 max-w-[100px] truncate">
+                          {parity ? (READINESS_LABEL[parity.readiness] || parity.readiness) : '-'}
+                        </td>
                         <td className="px-2 py-1.5 text-center">
                           {l.saved
                             ? <span className="text-green-600 font-bold text-xs">SI</span>
                             : <span className="text-gray-400 text-xs">NO</span>
                           }
                         </td>
-                        <td className="px-2 py-1.5 text-gray-600 max-w-[200px] truncate" title={l.message}>
-                          {l.message}
-                        </td>
                       </tr>
-                    ))}
+                      )
+                    })}
                     {filteredApplyLines.length > 100 && (
-                      <tr><td colSpan={6} className="text-center text-gray-400 py-1 text-[10px]">... y {filteredApplyLines.length - 100} filas mas</td></tr>
+                      <tr><td colSpan={7} className="text-center text-gray-400 py-1 text-[10px]">... y {filteredApplyLines.length - 100} filas mas</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1001,7 +1207,7 @@ export default function CentroCargaView() {
                       <div className="bg-white border border-red-200 rounded p-3">
                         <div className="font-medium text-gray-600 mb-1">Columnas esperadas</div>
                         <code className="text-xs text-gray-800">
-                          {preview.parse_metadata.expected_columns?.join(', ') || 'licencia, scout, supervisor, pagado, monto_pagado, fecha_pago, observacion'}
+                          {preview.parse_metadata.expected_columns?.join(', ') || 'licencia, scout, supervisor, pagado, monto_pagado, fecha_pago, fecha_atribucion, tipo_evento, observacion'}
                         </code>
                       </div>
                       <div className="bg-white border border-red-200 rounded p-3">
@@ -1068,6 +1274,8 @@ export default function CentroCargaView() {
                         <th className="text-left px-2 py-1.5">Supervisor</th>
                         <th className="text-center px-2 py-1.5">Pago</th>
                         <th className="text-right px-2 py-1.5">Monto</th>
+                        <th className="text-left px-2 py-1.5">Fecha Atr.</th>
+                        <th className="text-left px-2 py-1.5">Evento</th>
                         <th className="text-left px-2 py-1.5">Acciones</th>
                         <th className="text-left px-2 py-1.5">Avisos</th>
                       </tr>
@@ -1087,6 +1295,8 @@ export default function CentroCargaView() {
                           <td className="px-2 py-1.5 text-right font-mono">
                             {l.monto_pagado > 0 ? `S/ ${l.monto_pagado.toFixed(0)}` : '-'}
                           </td>
+                          <td className="px-2 py-1.5 text-[10px] font-mono">{l.fecha_atribucion || '-'}</td>
+                          <td className="px-2 py-1.5 text-[10px]">{l.tipo_evento || '-'}</td>
                           <td className="px-2 py-1.5">
                             <div className="flex flex-wrap gap-0.5">
                               {l.deduced_actions.map((a: string, j: number) => (

@@ -757,18 +757,21 @@ def create_cutoff(
     city_filter: Optional[str] = None,
     scout_type_filter: Optional[str] = None,
     created_by: Optional[str] = None,
+    date_basis: Optional[str] = "acquisition_anchor",
     db: Session = Depends(get_db),
 ):
     try:
         run = create_cutoff_run(
             db, cutoff_name, hire_date_from, hire_date_to, scheme_id,
             origin_filter, country_filter, city_filter, scout_type_filter, created_by,
+            date_basis=date_basis,
         )
         result = calculate_cutoff(db, run.id)
         return {
             "cutoff_run_id": run.id,
             "cutoff_name": run.cutoff_name,
             "status": run.status,
+            "date_basis": run.date_basis,
             "calculation": result,
         }
     except ValueError as e:
@@ -784,6 +787,7 @@ def create_cutoff_from_cohort_endpoint(
     scout_type_filter: Optional[str] = None,
     created_by: Optional[str] = None,
     force_override: bool = False,
+    date_basis: Optional[str] = "acquisition_anchor",
     db: Session = Depends(get_db),
 ):
     """
@@ -794,6 +798,7 @@ def create_cutoff_from_cohort_endpoint(
     - scheme_type: cabinet | fleet | custom (usa el resolver versionado)
     - scheme_id: deprecado, solo para compatibilidad legacy
     - force_override: si ya existe un corte locked, forzar recalculo
+    - date_basis: acquisition_anchor (default) | hire_date_legacy
     """
     try:
         result = create_cutoff_from_cohort(
@@ -805,6 +810,7 @@ def create_cutoff_from_cohort_endpoint(
             scout_type_filter=scout_type_filter,
             created_by=created_by,
             force_override=force_override,
+            date_basis=date_basis,
         )
         return result
     except ValueError as e:
@@ -2538,13 +2544,12 @@ def operation_canonical_snapshot(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     scheme_type: Optional[str] = Query(None, description="cabinet | fleet | custom"),
+    date_basis: Optional[str] = Query("acquisition_anchor", description="acquisition_anchor | hire_date_legacy"),
     db: Session = Depends(get_db),
 ):
     """
     Canonical operation snapshot desde module_ct_cabinet_drivers.
-    Incluye todos los drivers (con y sin scout), viajes reales desde
-    trips_2025/trips_2026, pago como overlay (cutoff + historical),
-    y metadata de frescura.
+    date_basis: acquisition_anchor (default) usa fecha ancla; hire_date_legacy usa hire_date raw.
     """
     return get_canonical_operation_snapshot(
         db,
@@ -2557,6 +2562,7 @@ def operation_canonical_snapshot(
         limit=limit,
         offset=offset,
         scheme_type=scheme_type,
+        date_basis=date_basis or "acquisition_anchor",
     )
 
 
@@ -2583,19 +2589,22 @@ def operation_diagnostic(
 @router.get("/operation/cohorts", response_model=CohortListResponse)
 def operation_cohorts(
     readiness: Optional[str] = Query(None, description="Filtrar por readiness_status: open, mature, locked, paid"),
+    date_basis: Optional[str] = Query("acquisition_anchor", description="acquisition_anchor | hire_date_legacy"),
     db: Session = Depends(get_db),
 ):
-    """Lista todas las cohortes ISO detectadas desde la fuente, con metadata temporal y readiness_status."""
-    items = get_iso_cohorts(db, readiness_filter=readiness)
+    """Lista cohortes ISO detectadas desde la fuente con metadata temporal y readiness_status.
+    date_basis: acquisition_anchor (default) agrupa por fecha ancla; hire_date_legacy por hire_date raw."""
+    items = get_iso_cohorts(db, readiness_filter=readiness, date_basis=date_basis or "acquisition_anchor")
     return CohortListResponse(total=len(items), cohorts=items)
 
 
 @router.get("/operation/cohorts/diagnostic", response_model=CohortDiagnosticResponse)
 def operation_cohorts_diagnostic(
+    date_basis: Optional[str] = Query("acquisition_anchor", description="acquisition_anchor | hire_date_legacy"),
     db: Session = Depends(get_db),
 ):
-    """Diagnostico de cohortes: conteos por estado de madurez, cohortes liquidables."""
-    return get_cohort_diagnostic(db)
+    """Diagnostico de cohortes: conteos por estado de madurez, cohortes liquidables, KPIs de anchor."""
+    return get_cohort_diagnostic(db, date_basis=date_basis or "acquisition_anchor")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -3123,19 +3132,22 @@ def unified_load_template():
     writer = _csv.writer(buf)
     writer.writerow([
         "licencia", "scout", "supervisor",
-        "pagado", "monto_pagado", "fecha_pago", "observacion",
+        "pagado", "monto_pagado", "fecha_pago",
+        "fecha_atribucion", "tipo_evento", "observacion",
         "driver_id", "nombre_conductor", "origen",
         "tipo_scout", "motivo_pago", "cohorte_iso",
     ])
     writer.writerow([
         "Q12345678", "Scout Alpha", "Juan Perez",
-        "SI", "150.00", "2026-01-15", "Pago enero",
+        "SI", "150.00", "2026-01-15",
+        "2026-01-10", "new", "Pago enero",
         "", "Carlos Garcia", "cabinet",
         "destajo", "Conversion 40%", "2026-W03",
     ])
     writer.writerow([
         "Q87654321", "Scout Beta", "Maria Lopez",
-        "NO", "0", "2026-01-15", "Solo atribucion",
+        "NO", "0", "2026-01-15",
+        "", "", "Solo atribucion",
         "", "Ana Martinez", "fleet",
         "", "", "",
     ])
@@ -3160,6 +3172,7 @@ def unified_load_preview_stream(
     parse_metadata: dict = {}
 
     def generate():
+        nonlocal parse_metadata
         yield json.dumps({"type": "started", "filename": filename}) + "\n"
 
         if filename.lower().endswith(".xlsx"):
@@ -3186,7 +3199,14 @@ def unified_load_preview_stream(
             return
 
         yield json.dumps({"type": "file_parsed", "rows": len(rows),
-                          "columns": columns}) + "\n"
+                          "columns": columns,
+                          "raw_rows_count": parse_metadata.get("raw_rows_count", len(rows)),
+                          "empty_rows_skipped": parse_metadata.get("empty_rows_skipped", 0),
+                          "ignored_duplicate_columns": parse_metadata.get("ignored_duplicate_columns", []),
+                          "license_non_empty_count": parse_metadata.get("license_non_empty_count", 0),
+                          "scout_non_empty_count": parse_metadata.get("scout_non_empty_count", 0),
+                          "first_row_dump": parse_metadata.get("first_row_dump"),
+                          }) + "\n"
 
         for event in unified_preview_stream(db, rows):
             yield json.dumps(event, default=str) + "\n"
@@ -3368,7 +3388,8 @@ async def unified_load_full_audit_report(
 
     # Generar BOM manualmente para compatibilidad Excel
     csv_content = "\ufeff" + generate_full_audit_csv(
-        preview_lines, apply_lines, file_name
+        preview_lines, apply_lines, file_name,
+        delimiter=";",
     )
     return Response(
         content=csv_content,
@@ -3397,6 +3418,7 @@ async def unified_load_summary_report(
         preview_result, apply_summary,
         len(preview_lines), len(apply_lines),
         file_name,
+        delimiter=";",
     )
     return Response(
         content=csv_content,
@@ -3669,4 +3691,254 @@ def rec_freshness(db: Session = Depends(get_db)):
 def rec_operational_gaps_diagnostic(db: Session = Depends(get_db)):
     """Diagnostico segmentado de los operational_without_attribution gaps."""
     return get_operational_gaps_diagnostic(db)
+
+
+# ── Acquisition Anchor (Fase 1) ─────────────────────────────────────────
+
+from app.services.acquisition_anchor_service import (
+    get_acquisition_anchor_summary,
+    get_acquisition_anchor_samples,
+)
+
+
+@router.get("/acquisition-anchor/summary")
+def acquisition_anchor_summary(db: Session = Depends(get_db)):
+    """Resumen de la capa semantica de acquisition anchor date.
+    Muestra cobertura, confianza, tipos de adquisicion y warnings."""
+    return get_acquisition_anchor_summary(db)
+
+
+@router.get("/acquisition-anchor/samples")
+def acquisition_anchor_samples(
+    origen: Optional[str] = Query(None, description="Filter by origen: cabinet, fleet"),
+    anchor_source: Optional[str] = Query(None, description="Filter by anchor_source"),
+    acquisition_type: Optional[str] = Query(None, description="Filter by acquisition_type"),
+    anchor_confidence: Optional[str] = Query(None, description="Filter by confidence: strong, medium, weak"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Muestra auditables de resolucion de anchor date.
+    Filtrable por origen, fuente, tipo y confianza."""
+    return get_acquisition_anchor_samples(
+        db,
+        origen=origen,
+        anchor_source=anchor_source,
+        acquisition_type=acquisition_type,
+        anchor_confidence=anchor_confidence,
+        limit=limit,
+        offset=offset,
+    )
+
+
+# ── Fase 2A.2: Refresh preview ──
+
+@router.get("/acquisition-anchor/refresh-preview")
+def acquisition_anchor_refresh_preview(
+    db: Session = Depends(get_db),
+):
+    """
+    Preview de drivers cuyo acquisition_anchor cambiaria si
+    module_ct_cabinet_drivers.lead_created_at se enriqueciera
+    desde cabinet_leads o drivers.
+
+    Detecta:
+    - fallback → official_strong (lead_created_at ahora poblado)
+    - cambio de acquisition_anchor_date
+    - cambio de cohorte ISO
+    - cambio de payment_anchor_status
+    """
+    from app.services.acquisition_anchor_service import (
+        resolve_acquisition_anchor, _batch_load_drivers, _batch_match_leads,
+    )
+
+    cols = ["driver_id", "driver_nombre", "driver_apellido", "driver_placa",
+            "hire_date", "lead_created_at", "created_at", "origen"]
+    rows = db.execute(text(f"""
+        SELECT {', '.join(cols)} FROM module_ct_cabinet_drivers
+    """)).fetchall()
+
+    all_driver_ids = [r[0] for r in rows]
+    drivers_map = _batch_load_drivers(db, all_driver_ids)
+
+    cabinet_without_lca = [
+        {"driver_id": r[0], "driver_nombre": r[1], "driver_apellido": r[2],
+         "driver_placa": r[3], "origen": r[7]}
+        for r in rows if (r[7] or "").lower() == "cabinet" and not r[5]
+    ]
+    leads_map = _batch_match_leads(db, cabinet_without_lca)
+
+    changes = []
+    for r in rows:
+        row_dict = dict(zip(cols, r))
+        did = row_dict["driver_id"]
+        origen = (row_dict.get("origen") or "").lower()
+
+        # Current anchor (without leads enrichment)
+        current = resolve_acquisition_anchor(row_dict, drivers_data=drivers_map.get(did))
+        current_source = current.get("anchor_source", "")
+        current_status = current.get("acquisition_anchor_date")
+
+        # Proposed anchor (with leads enrichment if available)
+        leads = leads_map.get(did)
+        proposed = resolve_acquisition_anchor(row_dict, drivers_data=drivers_map.get(did), leads_data=leads)
+        proposed_source = proposed.get("anchor_source", "")
+        proposed_status = proposed.get("acquisition_anchor_date")
+
+        if current_source != proposed_source or current_status != proposed_status:
+            changes.append({
+                "driver_id": did,
+                "origen": origen,
+                "current_anchor_date": current_status,
+                "current_anchor_source": current_source,
+                "current_anchor_confidence": current.get("anchor_confidence"),
+                "current_acquisition_type": current.get("acquisition_type"),
+                "current_payment_anchor_status": "fallback_operational_only" if "lead_created_at" not in current_source else "official_strong",
+                "proposed_anchor_date": proposed_status,
+                "proposed_anchor_source": proposed_source,
+                "proposed_anchor_confidence": proposed.get("anchor_confidence"),
+                "proposed_acquisition_type": proposed.get("acquisition_type"),
+                "proposed_payment_anchor_status": "official_strong" if "lead_created_at" in proposed_source else "fallback_operational_only",
+                "change_type": "fallback_to_official" if ("lead_created_at" in proposed_source and "lead_created_at" not in current_source) else "source_changed",
+            })
+
+    return {
+        "total_drivers": len(rows),
+        "drivers_with_changes": len(changes),
+        "change_types": {
+            "fallback_to_official": sum(1 for c in changes if c["change_type"] == "fallback_to_official"),
+            "source_changed": sum(1 for c in changes if c["change_type"] == "source_changed"),
+        },
+        "changes": changes[:200],
+    }
+
+
+# ── Anchor Review Workflow (Fase 2B) ─────────────────────────────────
+
+from app.services.anchor_review_service import (
+    get_anchor_review_queue,
+    perform_anchor_review,
+    get_review_audit_trail,
+    get_review_queue_summary,
+    bulk_perform_anchor_review,
+)
+
+
+@router.get("/anchor-review/queue")
+def anchor_review_queue(
+    status_filter: Optional[str] = Query(None, description="reactivated|weak|fallback|gap|blocked|manual_override"),
+    anchor_status_filter: Optional[str] = Query(None, description="blocked_missing_official_anchor|reported_pending_validation|fallback_operational_only"),
+    cutoff_run_id: Optional[int] = Query(None),
+    origin: Optional[str] = Query(None),
+    scout_id: Optional[int] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    q: Optional[str] = Query(None, description="Busqueda: driver_id, license, plate, name, scout"),
+    tags: Optional[str] = Query(None, description="Tags: REACTIVATED,FLEET,FALLBACK,WEAK,BLOCKED,PAYABLE,MANUAL_REVIEW,GAP_30,NEW,OFFICIAL_ANCHOR"),
+    db: Session = Depends(get_db),
+):
+    """Cola operacional de drivers que requieren revision manual de anchor."""
+    return get_anchor_review_queue(
+        db, status_filter=status_filter, anchor_status_filter=anchor_status_filter,
+        cutoff_run_id=cutoff_run_id, origin=origin, scout_id=scout_id,
+        limit=limit, offset=offset, q=q, tags=tags,
+    )
+
+
+@router.get("/anchor-review/summary")
+def anchor_review_summary(db: Session = Depends(get_db)):
+    """Resumen KPIs de la cola de revision de anchors."""
+    return get_review_queue_summary(db)
+
+
+@router.get("/anchor-review/audit/{line_id}")
+def anchor_review_audit(line_id: int, db: Session = Depends(get_db)):
+    """Audit trail de decisiones para una linea especifica."""
+    return {"line_id": line_id, "audit_entries": get_review_audit_trail(db, line_id)}
+
+
+class ReviewActionRequest(BaseModel):
+    action: str  # approve | reject | needs_supervisor | ignore | resolved_by_refresh
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+    notes: Optional[str] = None
+    reviewed_anchor_date: Optional[str] = None
+
+
+@router.post("/anchor-review/{line_id}/action")
+def anchor_review_action(line_id: int, body: ReviewActionRequest, db: Session = Depends(get_db)):
+    """Ejecuta una accion de revision manual sobre un anchor."""
+    try:
+        result = perform_anchor_review(
+            db, line_id=line_id, action=body.action, actor=body.actor,
+            reason=body.reason, notes=body.notes,
+            reviewed_anchor_date=body.reviewed_anchor_date,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class BulkReviewRequest(BaseModel):
+    line_ids: List[int]
+    action: str
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@router.post("/anchor-review/bulk")
+def anchor_review_bulk(body: BulkReviewRequest, db: Session = Depends(get_db)):
+    """Accion masiva de revision de anchors (max 500 lineas)."""
+    try:
+        return bulk_perform_anchor_review(
+            db, line_ids=body.line_ids, action=body.action,
+            actor=body.actor, reason=body.reason, notes=body.notes,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── Cutoff Freeze & Snapshot (Fase 2D) ──
+
+from app.services.cutoff_engine import freeze_cutoff, get_snapshot_status
+
+
+@router.get("/cutoffs/{cutoff_id}/snapshot-status")
+def cutoff_snapshot_status(cutoff_id: int, db: Session = Depends(get_db)):
+    """Estado de congelamiento/snapshot de un corte."""
+    try:
+        return get_snapshot_status(db, cutoff_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/cutoffs/{cutoff_id}/freeze")
+def cutoff_freeze(cutoff_id: int, frozen_by: Optional[str] = None, db: Session = Depends(get_db)):
+    """Congela un corte para aprobacion de pago."""
+    try:
+        return freeze_cutoff(db, cutoff_id, frozen_by=frozen_by)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── UX Feedback (Fase 2UX) ──
+
+from app.models.scout_liq import UxFeedback
+
+
+@router.post("/ux-feedback")
+def ux_feedback(
+    role: Optional[str] = None,
+    screen: Optional[str] = None,
+    message: Optional[str] = None,
+    severity: Optional[str] = None,
+    created_by: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """Recolecta feedback UX de los usuarios por rol/pantalla."""
+    fb = UxFeedback(role=role, screen=screen, message=message, severity=severity, created_by=created_by)
+    db.add(fb)
+    db.flush()
+    return {"id": fb.id, "status": "recorded"}
 

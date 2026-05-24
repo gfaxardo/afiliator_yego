@@ -2,8 +2,9 @@
 Cutoff Engine - Liquidador de Calidad Scouts Yego.
 Calcula cortes de liquidacion usando conteos reales de viajes.
 NO usa booleanos para calculo de pago.
-"""
 
+Fase 2: Integra acquisition_anchor_date como fecha principal de cohorte.
+"""
 import json
 import re
 from datetime import date, datetime
@@ -31,6 +32,12 @@ from app.services.cutoff_helpers import (
     build_pays_on_label, build_formula_label,
     build_payment_explanation, compute_conversion_rate, resolve_tier,
 )
+from app.services.acquisition_anchor_service import (
+    resolve_acquisition_anchor,
+    resolve_payment_anchor_status,
+    _batch_load_drivers,
+    _batch_match_leads,
+)
 
 
 def create_cutoff_run(
@@ -44,6 +51,7 @@ def create_cutoff_run(
     city_filter: Optional[str] = None,
     scout_type_filter: Optional[str] = None,
     created_by: Optional[str] = None,
+    date_basis: Optional[str] = "acquisition_anchor",
 ) -> CutoffRun:
     scheme = db.query(ConversionScheme).filter(ConversionScheme.id == scheme_id).first()
     if not scheme:
@@ -112,6 +120,7 @@ def create_cutoff_run(
         quality_data_contract_status="ok",
         conversion_metric_code=metric_code,
         conversion_metric_status="pending",
+        date_basis=date_basis,
         source_mapping_snapshot=json.dumps({
             "driver_id": "module_ct_cabinet_drivers.driver_id",
             "hire_date": "module_ct_cabinet_drivers.hire_date (CAST to DATE)",
@@ -120,6 +129,8 @@ def create_cutoff_run(
             "trips_8_14_count": "JOIN trips_2025/trips_2026 via conductor_id (7-13 days inclusive, condicion=Completado)",
             "conversion_rule": "5v7d_rate = converted_5v7d / activated_drivers",
             "payment_rule": "total_payable = activated_drivers × tier_amount",
+            "date_basis": date_basis,
+            "acquisition_anchor": "COALESCE(lead_created_at, leads.lead_created_at, drivers.hire_date, cabinet.hire_date, created_at)",
         }),
     )
     db.add(run)
@@ -223,11 +234,13 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
 
     # Also get hire_date from source for drivers missing it in assignment
     source_dates = {}
+    source_rows_for_anchor = []
     if all_driver_ids:
         placeholders = ", ".join(f":did{i}" for i in range(len(all_driver_ids)))
         params = {f"did{i}": did for i, did in enumerate(all_driver_ids)}
         rows = db.execute(text(
-            f"SELECT driver_id, hire_date, origen, viajes_0_7, viajes_8_14, orders "
+            f"SELECT driver_id, hire_date, origen, viajes_0_7, viajes_8_14, orders, "
+            f"lead_created_at, created_at, driver_nombre, driver_apellido, driver_placa "
             f"FROM module_ct_cabinet_drivers WHERE driver_id IN ({placeholders})"
         ), params).fetchall()
         for r in rows:
@@ -237,7 +250,29 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 "legacy_viajes_0_7": r[3],
                 "legacy_viajes_8_14": r[4],
                 "total_orders": r[5],
+                "lead_created_at": r[6],
+                "created_at": r[7],
+                "driver_nombre": r[8],
+                "driver_apellido": r[9],
+                "driver_placa": r[10],
             }
+            source_rows_for_anchor.append({
+                "driver_id": r[0],
+                "origen": r[2],
+                "hire_date": r[1],
+                "lead_created_at": r[6],
+                "created_at": r[7],
+                "driver_nombre": r[8],
+                "driver_apellido": r[9],
+                "driver_placa": r[10],
+            })
+
+    # ── Fase 2: Load anchor enrichment data ──
+    drivers_map = _batch_load_drivers(db, all_driver_ids)
+    cabinet_without_lca = [r for r in source_rows_for_anchor
+                           if (r.get("origen") or "").lower() == "cabinet"
+                           and not r.get("lead_created_at")]
+    leads_map = _batch_match_leads(db, cabinet_without_lca)
 
     # Build lines grouped by scout
     scout_groups: Dict[int, Dict[str, Any]] = {}
@@ -281,6 +316,7 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             driver_id=did,
             hire_date=hire_date,
             origin=assignment.origin or src.get("origin") or assignment.source_origin,
+            origin_tag=assignment.origin or assignment.source_origin or src.get("origin"),
             trips_7d=trips_0_7,
             trips_14d=trips_0_14,
             trips_0_7_count=trips_0_7,
@@ -293,7 +329,59 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             source_warning="; ".join(warnings) if warnings else None,
             line_status="evaluating",
             already_paid=check_already_paid(db, did),
+            operational_source_universe=getattr(assignment, "operational_source_universe", None),
+            source_confidence=getattr(assignment, "source_confidence", None),
+            payable_source_status=getattr(assignment, "payable_source_status", None),
+            official_source_origin_tag=assignment.origin or assignment.source_origin,
         )
+
+        # ── Fase 2: Resolve acquisition anchor ──
+        anchor_row = {
+            "driver_id": did,
+            "origen": src.get("origin") or assignment.origin or "",
+            "hire_date": src.get("hire_date_raw"),
+            "lead_created_at": src.get("lead_created_at"),
+            "created_at": src.get("created_at"),
+        }
+        anchor = resolve_acquisition_anchor(
+            anchor_row,
+            drivers_data=drivers_map.get(did),
+            leads_data=leads_map.get(did),
+        )
+        anchor_date_str = anchor.get("acquisition_anchor_date")
+        if anchor_date_str:
+            from datetime import date as dt_date
+            try:
+                line.acquisition_anchor_date = dt_date.fromisoformat(anchor_date_str)
+            except (ValueError, TypeError):
+                pass
+        line.anchor_source = anchor.get("anchor_source")
+        line.anchor_confidence = anchor.get("anchor_confidence")
+        line.acquisition_type = anchor.get("acquisition_type")
+        line.anchor_warning = anchor.get("anchor_warning")
+        line.reactivation_flag = anchor.get("reactivation_flag", False)
+        line.hire_date_reference = hire_date
+        line.days_hire_vs_anchor = anchor.get("days_hire_vs_anchor")
+
+        # Append anchor warnings to source_warning
+        anchor_alerts = []
+        if line.anchor_confidence == "weak":
+            anchor_alerts.append("Anchor debil: se uso fecha tecnica/ETL")
+        if line.acquisition_type == "cabinet_unknown_no_lca":
+            anchor_alerts.append("Cabinet sin lead_created_at: cohorte aproximada")
+        if line.reactivation_flag:
+            anchor_alerts.append("Reactivado: hire_date anterior al anchor")
+        if line.days_hire_vs_anchor and abs(line.days_hire_vs_anchor) > 30:
+            anchor_alerts.append(f"Diferencia alta anchor vs hire ({line.days_hire_vs_anchor}d)")
+        if (src.get("origin") or "").lower() == "fleet":
+            anchor_alerts.append("Fleet usa hire_date como anchor por diseno")
+        line.anchor_warning = "; ".join(anchor_alerts) if anchor_alerts else None
+
+        # ── Fase 2A.2: Payment anchor guardrails ──
+        pay_status = resolve_payment_anchor_status(anchor)
+        line.payment_anchor_status = pay_status["payment_anchor_status"]
+        line.is_auto_payable_anchor = pay_status["is_auto_payable_anchor"]
+        line.anchor_payment_block_reason = pay_status.get("anchor_payment_block_reason")
         scout_groups[sid]["lines"].append(line)
         db.add(line)
 
@@ -494,6 +582,16 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                 l.payment_formula_explanation = (
                     f"Driver {l.driver_id}: sin hire_date valida. No se puede evaluar."
                 )
+            elif getattr(l, "operational_source_universe", None) == "observed_no_official_source":
+                l.line_status = "blocked_no_official_source"
+                l.blocked_reason = "U1: Sin fuente oficial operativa. No pagable."
+                l.payment_status = "blocked"
+                l.eligible = False
+                l.calculated_amount = 0
+                l.payment_formula_explanation = (
+                    f"Driver {l.driver_id}: no aparece en Fuente Oficial Operativa. "
+                    f"No es pagable hasta reconciliar."
+                )
             elif l.already_paid:
                 l.line_status = "blocked_already_paid"
                 l.blocked_reason = "ya pagado en corte anterior"
@@ -590,6 +688,26 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                         f"no alcanza regla {label} (requiere >= {pay_threshold}). No paga."
                     )
 
+    # ── Fase 2A.2: Payment anchor guardrails ──
+    # Override payout for drivers without official anchor
+    anchor_blocks = 0
+    for _, g in scout_groups.items():
+        for l in g["lines"]:
+            if l.payout_eligible_flag and not l.is_auto_payable_anchor:
+                l.payout_eligible_flag = False
+                l.eligible = False
+                l.line_status = "blocked_missing_official_anchor"
+                l.payment_status = "blocked"
+                l.blocked_reason = (
+                    l.anchor_payment_block_reason
+                    or "Cabinet sin lead_created_at oficial; requiere validacion antes de pago."
+                )
+                l.payment_formula_explanation = (
+                    (l.payment_formula_explanation or "")
+                    + f" [BLOQUEADO: {l.blocked_reason}]"
+                )
+                anchor_blocks += 1
+
     run.status = "calculated"
     run.conversion_metric_status = "ok"
     excluded_invalid = sum(1 for _, g in scout_groups.items() for l in g["lines"] if l.source_quality_status != "ok")
@@ -597,6 +715,27 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     run.excluded_missing_trip_counts_count = 0
     run.total_source_drivers_count = len(all_driver_ids)
     run.unassigned_count = 0
+
+    # ── Fase 2: Compute anchor quality KPIs ──
+    all_lines_for_kpi = [l for _, g in scout_groups.items() for l in g["lines"]]
+    anchor_kpi = {
+        "total_drivers": len(all_lines_for_kpi),
+        "strong_anchors": sum(1 for l in all_lines_for_kpi if l.anchor_confidence == "strong"),
+        "medium_anchors": sum(1 for l in all_lines_for_kpi if l.anchor_confidence == "medium"),
+        "weak_anchors": sum(1 for l in all_lines_for_kpi if l.anchor_confidence == "weak"),
+        "cabinet_without_lead_created_at": sum(1 for l in all_lines_for_kpi if l.acquisition_type == "cabinet_unknown_no_lca"),
+        "reactivations": sum(1 for l in all_lines_for_kpi if l.reactivation_flag),
+        "fleet_migration": sum(1 for l in all_lines_for_kpi if l.acquisition_type == "fleet_migration"),
+        "fallback_hire_date": sum(1 for l in all_lines_for_kpi if l.anchor_source and "hire_date" in l.anchor_source),
+        "fallback_created_at": sum(1 for l in all_lines_for_kpi if l.anchor_source and "created_at" in l.anchor_source),
+        "anchor_payment_blocks": anchor_blocks,
+        "auto_payable": sum(1 for l in all_lines_for_kpi if l.is_auto_payable_anchor),
+        "blocked_missing_official_anchor": sum(1 for l in all_lines_for_kpi if l.payment_anchor_status == "blocked_missing_official_anchor"),
+        "reported_pending_validation": sum(1 for l in all_lines_for_kpi if l.payment_anchor_status == "reported_pending_validation"),
+        "official_strong": sum(1 for l in all_lines_for_kpi if l.payment_anchor_status == "official_strong"),
+        "official_medium": sum(1 for l in all_lines_for_kpi if l.payment_anchor_status == "official_medium"),
+    }
+    run.anchor_summary = json.dumps(anchor_kpi)
     db.commit()
 
     return {"status": "calculated", "cutoff_run_id": cutoff_run_id, "scouts_evaluated": len(scout_groups)}
@@ -684,6 +823,15 @@ def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = 
             "observed_affiliation_id": l.observed_affiliation_id,
             "line_observation_status": l.line_observation_status,
             "line_explanation": l.line_explanation,
+            # ── Fase 2: Anchor fields ──
+            "acquisition_anchor_date": str(l.acquisition_anchor_date) if l.acquisition_anchor_date else None,
+            "anchor_source": l.anchor_source,
+            "anchor_confidence": l.anchor_confidence,
+            "acquisition_type": l.acquisition_type,
+            "anchor_warning": l.anchor_warning,
+            "reactivation_flag": l.reactivation_flag,
+            "hire_date_reference": str(l.hire_date_reference) if l.hire_date_reference else None,
+            "days_hire_vs_anchor": l.days_hire_vs_anchor,
         }
         for l in lines
     ]
@@ -711,11 +859,121 @@ def approve_cutoff(db: Session, cutoff_run_id: int, approved_by: Optional[str] =
     if run.conversion_metric_status != "ok":
         raise ValueError("No se puede aprobar: conversion_metric_status no es 'ok'")
 
+    # Check U2 warnings: count lines with source warnings
+    u2_count = db.query(CutoffDriverLine).filter(
+        CutoffDriverLine.cutoff_run_id == cutoff_run_id,
+        CutoffDriverLine.operational_source_universe == "driver_found_not_official_source",
+    ).count()
+
+    u1_count = db.query(CutoffDriverLine).filter(
+        CutoffDriverLine.cutoff_run_id == cutoff_run_id,
+        CutoffDriverLine.operational_source_universe == "observed_no_official_source",
+        CutoffDriverLine.calculated_amount > 0,
+    ).count()
+
+    if u1_count > 0:
+        raise ValueError(
+            f"No se puede aprobar: {u1_count} linea(s) U1 (observadas sin fuente oficial) "
+            f"tienen monto calculado. Deben estar bloqueadas."
+        )
+
+    # ── Fase 2E: Anchor payment guardrails ──
+    blocked_anchor_count = db.query(CutoffDriverLine).filter(
+        CutoffDriverLine.cutoff_run_id == cutoff_run_id,
+        CutoffDriverLine.payment_anchor_status.in_([
+            "blocked_missing_official_anchor", "reported_pending_validation",
+        ]),
+        CutoffDriverLine.calculated_amount > 0,
+    ).count()
+    if blocked_anchor_count > 0:
+        raise ValueError(
+            f"No se puede aprobar: {blocked_anchor_count} linea(s) con anchor no oficial "
+            f"tienen monto calculado. Revisar Anchor Review Queue."
+        )
+
+    manual_review_pending = db.query(CutoffDriverLine).filter(
+        CutoffDriverLine.cutoff_run_id == cutoff_run_id,
+        CutoffDriverLine.anchor_review_status.in_(["pending_review", "requires_supervisor_review", None]),
+        CutoffDriverLine.payment_anchor_status.in_([
+            "fallback_operational_only", "reported_pending_validation",
+            "blocked_missing_official_anchor",
+        ]),
+        CutoffDriverLine.payout_eligible_flag == True,
+    ).count()
+    if manual_review_pending > 0:
+        raise ValueError(
+            f"No se puede aprobar: {manual_review_pending} linea(s) con anchor pendiente "
+            f"de revision tienen payout elegible. Revisar Anchor Review Queue."
+        )
+
+    run.approving_with_source_warnings = u2_count > 0
+    run.warning_acknowledged = u2_count > 0
+
     run.status = "approved"
     run.approved_by = approved_by
     run.approved_at = datetime.now()
     db.commit()
-    return {"status": "approved", "cutoff_run_id": cutoff_run_id}
+    return {"status": "approved", "cutoff_run_id": cutoff_run_id,
+            "u2_warnings_detected": u2_count > 0, "u2_count": u2_count,
+            "anchor_blocks_checked": True}
+
+
+def freeze_cutoff(db: Session, cutoff_run_id: int, frozen_by: Optional[str] = None) -> Dict[str, Any]:
+    """Fase 2D: Freeze a cutoff snapshot for payment approval."""
+    import hashlib as _hashlib
+    run = db.query(CutoffRun).filter(CutoffRun.id == cutoff_run_id).first()
+    if not run:
+        raise ValueError(f"Cutoff run {cutoff_run_id} no encontrado")
+    if run.status not in ("reviewed", "calculated"):
+        raise ValueError(f"No se puede congelar cutoff en estado '{run.status}'. Requiere 'reviewed' o 'calculated'.")
+
+    total_lines = db.query(CutoffDriverLine).filter(
+        CutoffDriverLine.cutoff_run_id == cutoff_run_id).count()
+    totals = db.query(CutoffDriverLine).filter(
+        CutoffDriverLine.cutoff_run_id == cutoff_run_id,
+        CutoffDriverLine.payout_eligible_flag == True,
+    ).with_entities(CutoffDriverLine.calculated_amount).all()
+    total_payable = sum(float(t[0] or 0) for t in totals)
+
+    snapshot_data = f"{cutoff_run_id}:{run.status}:{total_lines}:{total_payable}:{datetime.now().isoformat()}"
+    run.frozen_at = datetime.now()
+    run.frozen_by = frozen_by
+    run.snapshot_hash = _hashlib.sha256(snapshot_data.encode()).hexdigest()[:16]
+    run.snapshot_version = (run.snapshot_version or 1) + 1 if run.frozen_at else 2
+    run.lines_count_snapshot = total_lines
+    run.totals_snapshot = json.dumps({"total_payable": total_payable, "total_lines": total_lines})
+    run.rules_snapshot = run.config_snapshot
+    run.review_completed_at = datetime.now() if not run.review_completed_at else run.review_completed_at
+    db.commit()
+
+    return {
+        "status": "frozen",
+        "cutoff_run_id": cutoff_run_id,
+        "snapshot_hash": run.snapshot_hash,
+        "snapshot_version": run.snapshot_version,
+        "total_lines": total_lines,
+        "total_payable": total_payable,
+    }
+
+
+def get_snapshot_status(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
+    """Fase 2D: Get snapshot/freeze status of a cutoff."""
+    run = db.query(CutoffRun).filter(CutoffRun.id == cutoff_run_id).first()
+    if not run:
+        raise ValueError(f"Cutoff run {cutoff_run_id} no encontrado")
+    return {
+        "cutoff_run_id": cutoff_run_id,
+        "status": run.status,
+        "frozen_at": str(run.frozen_at) if run.frozen_at else None,
+        "frozen_by": run.frozen_by,
+        "snapshot_hash": run.snapshot_hash,
+        "snapshot_version": run.snapshot_version,
+        "is_stale": run.is_stale,
+        "lines_count_snapshot": run.lines_count_snapshot,
+        "can_freeze": run.status in ("reviewed", "calculated"),
+        "can_approve": run.status == "reviewed",
+        "can_pay": run.status == "approved",
+    }
 
 
 def mark_cutoff_paid(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
@@ -852,6 +1110,8 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
         "formula_type", "currency",
         # Driver
         "driver_id", "driver_name", "license", "hire_date", "origin",
+        "acquisition_anchor_date", "anchor_source", "anchor_confidence",
+        "acquisition_type", "reactivation_flag", "days_hire_vs_anchor", "anchor_warning",
         "trips_7d", "trips_14d",
         "counts_as_activated_base", "counts_as_quality_5v7d", "counts_for_payment",
         # Pago
@@ -962,6 +1222,13 @@ def export_cutoff_financial_csv(db: Session, cutoff_run_id: int) -> str:
             driver_licenses.get(l.driver_id, ""),
             str(l.hire_date) if l.hire_date else "",
             l.origin or "",
+            str(l.acquisition_anchor_date) if l.acquisition_anchor_date else "",
+            l.anchor_source or "",
+            l.anchor_confidence or "",
+            l.acquisition_type or "",
+            "true" if l.reactivation_flag else "false",
+            str(l.days_hire_vs_anchor) if l.days_hire_vs_anchor is not None else "",
+            l.anchor_warning or "",
             l.trips_0_7_count or 0, l.trips_0_14_count or 0,
             str(counts_base).lower(), str(counts_quality).lower(), str(counts_payment).lower(),
             l.payment_status or "not_payable", payment_origin,
@@ -990,6 +1257,7 @@ def create_cutoff_from_cohort(
     scout_type_filter: Optional[str] = None,
     created_by: Optional[str] = None,
     force_override: bool = False,
+    date_basis: Optional[str] = "acquisition_anchor",
 ) -> Dict[str, Any]:
     """
     Crea un cutoff desde una cohorte ISO madura, resolviendo automaticamente
@@ -1085,6 +1353,7 @@ def create_cutoff_from_cohort(
         quality_data_contract_status="ok",
         conversion_metric_code=metric_code,
         conversion_metric_status="pending",
+        date_basis=date_basis,
         source_mapping_snapshot=json.dumps({
             "driver_id": "module_ct_cabinet_drivers.driver_id",
             "hire_date": "module_ct_cabinet_drivers.hire_date (CAST to DATE)",

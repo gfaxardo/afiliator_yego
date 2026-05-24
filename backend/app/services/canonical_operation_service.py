@@ -9,6 +9,8 @@ Pago: cutoff engine + historical upload como overlay.
 NO usa legacy flags (viajes_0_7 / viajes_8_14) para conteo.
 NO modifica tablas fuente.
 NO lee HistoricalImportLine como base operativa.
+
+Fase 2A.2: operation windows anchored on acquisition_anchor_date (date_basis support).
 """
 
 import time as _time
@@ -35,6 +37,33 @@ def _iso_week_expr(col: str) -> str:
 
 def _build_iso_label(iy_expr: str, iw_expr: str) -> str:
     return f"'S' || LPAD({iw_expr}::text, 2, '0') || '-' || {iy_expr}::text"
+
+
+def _anchor_date_expr(table_alias: str = "s") -> str:
+    """SQL expression for acquisition_anchor_date.
+    COALESCE chain: lead_created_at > hire_date > created_at.
+    Does NOT include drivers table or leads table (those are Python-level)."""
+    return (
+        f"COALESCE({table_alias}.lead_created_at::date, "
+        f"{table_alias}.hire_date::date, "
+        f"{table_alias}.created_at::date)"
+    )
+
+
+def _date_column(table_alias: str = "src", date_basis: str = "acquisition_anchor") -> str:
+    """Return the date column expression based on date_basis."""
+    if date_basis == "hire_date_legacy":
+        return f"{table_alias}.hire_date::date"
+    return _anchor_date_expr(table_alias)
+
+
+def _date_column_raw(table_alias: str = "src", date_basis: str = "acquisition_anchor") -> str:
+    """Return date column expression as raw string (for cast operations)."""
+    if date_basis == "hire_date_legacy":
+        return f"{table_alias}.hire_date::text"
+    return (f"COALESCE({table_alias}.lead_created_at::text, "
+            f"{table_alias}.hire_date, "
+            f"{table_alias}.created_at::text)")
 
 def _compute_lifecycle(trips_0_7: int, trips_8_14: int) -> str:
     trips_0_14 = trips_0_7 + trips_8_14
@@ -124,21 +153,23 @@ def get_canonical_operation_snapshot(
     limit: int = 100,
     offset: int = 0,
     scheme_type: Optional[str] = None,
+    date_basis: str = "acquisition_anchor",
 ) -> Dict[str, Any]:
     t0 = _time.perf_counter()
 
     # Enforce date window
     hd_from, hd_to = _ensure_date_window(hire_date_from, hire_date_to)
+    dc = _date_column("src", date_basis)
+    anchor_raw = _date_column_raw("src", date_basis)
 
     # Set timeout
     db.execute(text(STATEMENT_TIMEOUT))
 
     # ── WHERE clause ──
     where_parts = [
-        "src.hire_date IS NOT NULL",
-        "src.hire_date != ''",
-        "src.hire_date::date >= :hd_from",
-        "src.hire_date::date <= :hd_to",
+        f"{dc} IS NOT NULL",
+        f"{dc} >= :hd_from",
+        f"{dc} <= :hd_to",
     ]
     params: Dict[str, Any] = {
         "hd_from": hd_from.isoformat(),
@@ -159,8 +190,8 @@ def get_canonical_operation_snapshot(
     t1 = _time.perf_counter()
 
     # ── 1. Base drivers (LIMIT applied HERE, before lateral joins) ──
-    iy_expr = _iso_year_expr("src.hire_date::date")
-    iw_expr = _iso_week_expr("src.hire_date::date")
+    iy_expr = _iso_year_expr(dc)
+    iw_expr = _iso_week_expr(dc)
     iso_label = _build_iso_label(iy_expr, iw_expr)
 
     count_sql = f"SELECT COUNT(*) FROM {SOURCE_TABLE} src WHERE {where_clause}"
@@ -172,8 +203,8 @@ def get_canonical_operation_snapshot(
             COALESCE(src.driver_nombre, '') AS driver_nombre,
             COALESCE(src.driver_apellido, '') AS driver_apellido,
             src.license,
-            src.hire_date::text AS hire_date_raw,
-            src.hire_date::date AS hire_date,
+            {anchor_raw} AS hire_date_raw,
+            {dc} AS hire_date,
             {iy_expr} AS iso_year,
             {iw_expr} AS iso_week,
             {iso_label} AS iso_week_label,
@@ -183,10 +214,13 @@ def get_canonical_operation_snapshot(
             src.viajes_8_14 AS legacy_viajes_8_14,
             src.orders AS total_orders,
             src.status AS source_driver_status,
-            COALESCE(src.updated_at::text, src.created_at::text, '') AS source_updated_at
+            COALESCE(src.updated_at::text, src.created_at::text, '') AS source_updated_at,
+            src.lead_created_at::text AS lead_created_at_raw,
+            src.hire_date::text AS hire_date_reference_raw,
+            {dc} AS acquisition_anchor_date
         FROM {SOURCE_TABLE} src
         WHERE {where_clause}
-        ORDER BY src.hire_date::date DESC, src.driver_id
+        ORDER BY {dc} DESC, src.driver_id
         LIMIT :limit OFFSET :offset
     """
     params["limit"] = limit
@@ -208,7 +242,7 @@ def get_canonical_operation_snapshot(
     driver_ids = [r[0] for r in base_rows if r[0]]
 
     # ── 2. Batch compute trips (only for visible drivers) ──
-    trip_map = _batch_trip_counts(db, driver_ids)
+    trip_map = _batch_trip_counts(db, driver_ids, date_basis=date_basis)
     t3 = _time.perf_counter()
 
     # ── 3. Scout assignments ──
@@ -260,6 +294,9 @@ def get_canonical_operation_snapshot(
             "driver_name": driver_name,
             "license": dd.get("license"),
             "hire_date": str(dd.get("hire_date")) if dd.get("hire_date") else dd.get("hire_date_raw"),
+            "acquisition_anchor_date": str(dd.get("acquisition_anchor_date")) if dd.get("acquisition_anchor_date") else None,
+            "hire_date_reference": str(dd.get("hire_date")) if dd.get("hire_date") else dd.get("hire_date_raw"),
+            "date_basis": date_basis,
             "iso_week": f"{dd.get('iso_year')}-W{dd.get('iso_week'):02d}" if dd.get("iso_year") and dd.get("iso_week") else None,
             "iso_week_label": dd.get("iso_week_label"),
             "origin": dd.get("origin"),
@@ -713,12 +750,14 @@ def _batch_scout_assignments(db: Session, driver_ids: List[str]) -> Dict[str, Di
     return result
 
 
-def _batch_trip_counts(db: Session, driver_ids: List[str]) -> Dict[str, Dict[str, int]]:
+def _batch_trip_counts(db: Session, driver_ids: List[str],
+                        date_basis: str = "acquisition_anchor") -> Dict[str, Dict[str, int]]:
     if not driver_ids:
         return {}
     placeholders = ", ".join(f":did{i}" for i in range(len(driver_ids)))
     params = {f"did{i}": did for i, did in enumerate(driver_ids)}
     db.execute(text(STATEMENT_TIMEOUT))
+    anchor_col = _anchor_date_expr("s")
     sql = f"""
         SELECT s.driver_id,
             COALESCE(SUM(t.trips_0_7), 0)::int AS trips_0_7_count,
@@ -728,42 +767,43 @@ def _batch_trip_counts(db: Session, driver_ids: List[str]) -> Dict[str, Dict[str
         LEFT JOIN LATERAL (
             SELECT
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '7 days'
+                    WHERE fecha_inicio_viaje >= {anchor_col}
+                      AND fecha_inicio_viaje < {anchor_col} + INTERVAL '7 days'
                       AND condicion = 'Completado'
                 ) AS trips_0_7,
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
+                    WHERE fecha_inicio_viaje >= {anchor_col} + INTERVAL '7 days'
+                      AND fecha_inicio_viaje < {anchor_col} + INTERVAL '14 days'
                       AND condicion = 'Completado'
                 ) AS trips_8_14,
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
+                    WHERE fecha_inicio_viaje >= {anchor_col}
+                      AND fecha_inicio_viaje < {anchor_col} + INTERVAL '30 days'
                       AND condicion = 'Completado'
                 ) AS trips_0_30
             FROM trips_2026 WHERE conductor_id = s.driver_id
             UNION ALL
             SELECT
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '7 days'
+                    WHERE fecha_inicio_viaje >= {anchor_col}
+                      AND fecha_inicio_viaje < {anchor_col} + INTERVAL '7 days'
                       AND condicion = 'Completado'
                 ) AS trips_0_7,
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
+                    WHERE fecha_inicio_viaje >= {anchor_col} + INTERVAL '7 days'
+                      AND fecha_inicio_viaje < {anchor_col} + INTERVAL '14 days'
                       AND condicion = 'Completado'
                 ) AS trips_8_14,
                 COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
+                    WHERE fecha_inicio_viaje >= {anchor_col}
+                      AND fecha_inicio_viaje < {anchor_col} + INTERVAL '30 days'
                       AND condicion = 'Completado'
                 ) AS trips_0_30
             FROM trips_2025 WHERE conductor_id = s.driver_id
-              AND s.hire_date::date + INTERVAL '30 days' < '2026-01-01'::date
+              AND {anchor_col} + INTERVAL '30 days' < '2026-01-01'::date
         ) t ON true
-        WHERE s.driver_id IN ({placeholders}) AND s.hire_date IS NOT NULL AND s.hire_date != ''
+        WHERE s.driver_id IN ({placeholders})
+          AND {anchor_col} IS NOT NULL
         GROUP BY s.driver_id
     """
     rows = db.execute(text(sql), params).fetchall()
