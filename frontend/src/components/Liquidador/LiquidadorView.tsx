@@ -183,7 +183,12 @@ export default function LiquidadorView() {
   const [filterLifecycle, setFilterLifecycle] = useState('')
   const [filterPayment, setFilterPayment] = useState('')
   const [filterOrigin, setFilterOrigin] = useState('')
-  const [filterAnchor, setFilterAnchor] = useState('')  // Fase 2A.3
+  const [filterAnchor, setFilterAnchor] = useState('')
+  // Fase 3A.0
+  const [searchQ, setSearchQ] = useState('')
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [tagCounts, setTagCounts] = useState<Record<string, number>>({})
+  const [debounceTimer, setDebounceTimer] = useState<ReturnType<typeof setTimeout> | null>(null)  // Fase 2A.3
 
   // Create form
   const [formName, setFormName] = useState('Corte ' + new Date().toISOString().slice(0, 10))
@@ -215,10 +220,30 @@ export default function LiquidadorView() {
   const loadCutoffDetails = (id: number) => {
     setSelectedCutoff(id)
     setSelectedScoutId(null)
-    setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin('')
+    setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin(''); setFilterAnchor('')
+    setSearchQ(''); setSelectedTags([])
     Promise.all([getCutoffSummary(id), getCutoffLines(id)])
-      .then(([s, l]) => { setSummaries(s); setLines(l) })
+      .then(([s, l]) => { setSummaries(s); setLines(l.lines || []); setTagCounts(l.tag_counts || {}) })
       .catch((err: any) => setError(err.response?.data?.detail || err.message))
+  }
+
+  const searchCutoffLines = (id: number, qVal: string, tagsVal: string[]) => {
+    Promise.all([getCutoffSummary(id), getCutoffLines(id, undefined, qVal || undefined, tagsVal.length > 0 ? tagsVal.join(',') : undefined)])
+      .then(([s, l]) => { setSummaries(s); setLines(l.lines || []); setTagCounts(l.tag_counts || {}) })
+      .catch((err: any) => setError(err.response?.data?.detail || err.message))
+  }
+
+  const handleSearchChange = (val: string) => {
+    setSearchQ(val)
+    if (debounceTimer) clearTimeout(debounceTimer)
+    const timer = setTimeout(() => { if (selectedCutoff) searchCutoffLines(selectedCutoff, val, selectedTags) }, 300)
+    setDebounceTimer(timer)
+  }
+
+  const handleTagToggle = (tag: string) => {
+    const next = selectedTags.includes(tag) ? selectedTags.filter(t => t !== tag) : [...selectedTags, tag]
+    setSelectedTags(next)
+    if (selectedCutoff) searchCutoffLines(selectedCutoff, searchQ, next)
   }
 
   const applyScoutFilter = (scoutId: number) => {
@@ -567,6 +592,54 @@ export default function LiquidadorView() {
       {/* Lines detail — enhanced operational view */}
       {selectedCutoff && lines.length > 0 && (
         <div>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold">Lineas del Corte</h3>
+            <span className="text-xs text-gray-400">{lines.length} lineas</span>
+          </div>
+
+          {/* ── Fase 3A.0: Search + Tag chips ── */}
+          <div className="space-y-2 mb-3">
+            <div className="relative">
+              <input type="text" value={searchQ}
+                onChange={e => handleSearchChange(e.target.value)}
+                placeholder="Buscar driver, licencia, placa..."
+                className="w-full border border-gray-200 rounded px-3 py-1.5 text-xs focus:outline-none focus:border-blue-300"
+              />
+              {searchQ && (
+                <button onClick={() => handleSearchChange('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">X</button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(tagCounts).map(([tag, count]) => {
+                const isActive = selectedTags.includes(tag)
+                const colors: Record<string, string> = {
+                  REACTIVATED: 'border-orange-300 text-orange-700 bg-orange-50',
+                  FLEET: 'border-blue-300 text-blue-700 bg-blue-50',
+                  FALLBACK: 'border-yellow-300 text-yellow-700 bg-yellow-50',
+                  WEAK: 'border-red-300 text-red-700 bg-red-50',
+                  BLOCKED: 'border-red-400 text-red-800 bg-red-100',
+                  PAYABLE: 'border-green-300 text-green-700 bg-green-50',
+                  MANUAL_REVIEW: 'border-yellow-300 text-yellow-700 bg-yellow-50',
+                  GAP_30: 'border-amber-300 text-amber-700 bg-amber-50',
+                  NEW: 'border-emerald-300 text-emerald-700 bg-emerald-50',
+                }
+                return (
+                  <button key={tag} onClick={() => handleTagToggle(tag)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                      isActive ? `${colors[tag] || 'border-gray-300'} ring-1` : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                    }`}>
+                    {tag.replace('_', ' ')} ({count})
+                  </button>
+                )
+              })}
+              {(selectedTags.length > 0 || searchQ) && (
+                <button onClick={() => { setSelectedTags([]); setSearchQ(''); if (selectedCutoff) loadCutoffDetails(selectedCutoff) }}
+                  className="px-2 py-0.5 text-[10px] text-red-500 hover:underline">Limpiar</button>
+              )}
+            </div>
+          </div>
+
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-semibold">
               Detalle por Conductor (Corte #{selectedCutoff})

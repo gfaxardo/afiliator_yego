@@ -934,9 +934,11 @@ def cutoff_summary(cutoff_id: int, db: Session = Depends(get_db)):
 def cutoff_lines(
     cutoff_id: int,
     scout_id: Optional[int] = Query(None),
+    q: Optional[str] = Query(None, description="Busqueda: driver_id, origin, anchor_source"),
+    tags: Optional[str] = Query(None, description="Tags: REACTIVATED,FLEET,FALLBACK,WEAK,BLOCKED,PAYABLE,MANUAL_REVIEW,GAP_30"),
     db: Session = Depends(get_db),
 ):
-    return get_cutoff_lines(db, cutoff_id, scout_id)
+    return get_cutoff_lines(db, cutoff_id, scout_id, q=q, tags=tags)
 
 
 @router.get("/cutoffs/{cutoff_id}/export-financial.csv")

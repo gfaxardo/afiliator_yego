@@ -786,12 +786,40 @@ def get_cutoff_summary(db: Session, cutoff_run_id: int) -> List[Dict]:
     ]
 
 
-def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = None) -> List[Dict]:
-    q = db.query(CutoffDriverLine).filter(CutoffDriverLine.cutoff_run_id == cutoff_run_id)
+def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = None,
+                      q: Optional[str] = None, tags: Optional[str] = None) -> Dict[str, Any]:
+    from app.services.tag_filter_engine import (
+        apply_tag_filter, compute_tag_counts, resolve_tag_filters,
+    )
+    model = CutoffDriverLine
+    query = db.query(model).filter(model.cutoff_run_id == cutoff_run_id)
     if scout_id:
-        q = q.filter(CutoffDriverLine.scout_id == scout_id)
-    lines = q.order_by(CutoffDriverLine.scout_id, CutoffDriverLine.trips_0_7_count.desc()).all()
-    return [
+        query = query.filter(model.scout_id == scout_id)
+
+    # ── Text search ──
+    if q and q.strip():
+        from sqlalchemy import or_
+        term = f"%{q.strip()}%"
+        query = query.filter(or_(
+            model.driver_id.ilike(term),
+            model.origin.ilike(term),
+            model.anchor_source.ilike(term),
+            model.acquisition_type.ilike(term),
+            model.payment_anchor_status.ilike(term),
+            model.line_status.ilike(term),
+        ))
+
+    # ── Tag counts (before applying tag filters) ──
+    tag_counts = compute_tag_counts(query, model)
+
+    # ── Tag filters ──
+    tag_list = resolve_tag_filters(tags)
+    for tag in tag_list:
+        query = apply_tag_filter(query, model, tag)
+
+    total = query.count()
+    lines = query.order_by(model.scout_id, model.trips_0_7_count.desc()).all()
+    result_lines = [
         {
             "id": l.id,
             "scout_id": l.scout_id,
@@ -835,6 +863,12 @@ def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = 
         }
         for l in lines
     ]
+    return {
+        "lines": result_lines,
+        "total": total,
+        "tag_counts": tag_counts,
+        "active_filters": {"q": q, "tags": tag_list},
+    }
 
 
 def review_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:

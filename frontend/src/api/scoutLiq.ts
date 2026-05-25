@@ -306,8 +306,12 @@ export async function getCutoffSummary(cutoffId: number): Promise<any[]> {
   return data
 }
 
-export async function getCutoffLines(cutoffId: number, scoutId?: number): Promise<any[]> {
-  const { data } = await api.get(`/cutoffs/${cutoffId}/lines`, { params: scoutId ? { scout_id: scoutId } : {} })
+export async function getCutoffLines(cutoffId: number, scoutId?: number, q?: string, tags?: string): Promise<{ lines: any[]; total: number; tag_counts: Record<string, number>; active_filters: any }> {
+  const params: any = {}
+  if (scoutId) params.scout_id = scoutId
+  if (q) params.q = q
+  if (tags) params.tags = tags
+  const { data } = await api.get(`/cutoffs/${cutoffId}/lines`, { params })
   return data
 }
 
