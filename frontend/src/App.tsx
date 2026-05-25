@@ -20,6 +20,7 @@ import PaymentSchemesConfigView from './components/Liquidador/PaymentSchemesConf
 import ReconciliationView from './components/Liquidador/ReconciliationView'
 import UnifiedLoadView from './components/Liquidador/UnifiedLoadView'
 import CentroCargaView from './components/Liquidador/CentroCargaView'
+import CentroOperativoView from './components/Liquidador/CentroOperativoView'
 import HealthDashboardView from './components/Liquidador/HealthDashboardView'
 import AcquisitionAnchorView from './components/Liquidador/AcquisitionAnchorView'
 import AnchorReviewQueueView from './components/Liquidador/AnchorReviewQueueView'
@@ -40,29 +41,31 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/scout-liq" element={<LiquidadorLayout />}>
-          <Route index element={<Navigate to="operation" replace />} />
+          {/* ── Centro Operativo: ruta principal e indice ── */}
+          <Route index element={<Navigate to="centro-operativo" replace />} />
+          <Route path="centro-operativo" element={<CentroOperativoView />} />
 
-          {/* ── Main visible routes ── */}
+          {/* ── Redirects: flujos duplicados → Centro Operativo ── */}
+          <Route path="liquidador" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
+          <Route path="pagos" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
+          <Route path="centro-carga" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
+          <Route path="unified-load" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
+          <Route path="reconciliation" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
+
+          {/* ── Vistas de detalle / solo lectura (sin CTA de flujo) ── */}
           <Route path="operation" element={<OperationView />} />
-          <Route path="liquidador" element={<LiquidadorView />} />
-          <Route path="centro-carga" element={<CentroCargaView />} />
           <Route path="configuracion" element={<PaymentSchemesConfigView />} />
-          <Route path="pagos" element={<PaymentView />} />
           <Route path="dashboard" element={<DashboardView />} />
 
-          {/* ── Redirects: unified-load y reconciliation al Centro de Carga ── */}
-          <Route path="unified-load" element={<Navigate to="/scout-liq/centro-carga" replace />} />
-          <Route path="reconciliation" element={<Navigate to="/scout-liq/centro-carga" replace />} />
-
-          {/* ── Always-visible advanced routes ── */}
+          {/* ── Always-visible advanced routes (admin / auxiliares) ── */}
           <Route path="supervisor-bonus" element={<SupervisorBonusView />} />
           <Route path="paid-history" element={<PaidHistoryView />} />
-          <Route path="historial" element={<PaidHistoryView />} />
+          <Route path="historial" element={<Navigate to="/scout-liq/paid-history" replace />} />
           <Route path="scouts" element={<ScoutsList />} />
           <Route path="scouts/new" element={<CreateScout />} />
           <Route path="config" element={<ConfigView />} />
 
-          {/* ── Legacy upload routes (ocultas sin flag) ── */}
+          {/* ── Legacy upload routes (ocultas sin flag, redirigen a Centro Operativo si no habilitadas) ── */}
           <Route path="historical">
             {legacyRoute('Historico (Carga Historica de Pagos)', HistoricalImportView)}
           </Route>
@@ -89,10 +92,10 @@ function App() {
           <Route path="health" element={<HealthCheck />} />
           <Route path="salud" element={<HealthDashboardView />} />
 
-          {/* Acquisition Anchor (Fase 1) */}
+          {/* Acquisition Anchor (detail / solo lectura) */}
           <Route path="anchor" element={<AcquisitionAnchorView />} />
 
-          {/* Anchor Review Queue (Fase 2B) */}
+          {/* Anchor Review Queue (herramienta de detalle) */}
           <Route path="review-queue" element={<AnchorReviewQueueView />} />
         </Route>
         <Route path="*" element={<Navigate to="/scout-liq" replace />} />

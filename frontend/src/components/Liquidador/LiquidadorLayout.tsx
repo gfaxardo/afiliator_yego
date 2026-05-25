@@ -2,10 +2,8 @@ import { useState, useMemo } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 
 const MAIN_TABS = [
+  { to: '/scout-liq/centro-operativo', label: 'Centro Operativo' },
   { to: '/scout-liq/operation', label: 'Operacion' },
-  { to: '/scout-liq/liquidador', label: 'Liquidador' },
-  { to: '/scout-liq/pagos', label: 'Pagos' },
-  { to: '/scout-liq/centro-carga', label: 'Centro de Carga' },
   { to: '/scout-liq/configuracion', label: 'Configuracion' },
   { to: '/scout-liq/dashboard', label: 'Dashboard' },
   { to: '/scout-liq/anchor', label: 'Anchor' },
@@ -21,6 +19,9 @@ const LEGACY_UPLOAD_TABS = [
   { to: '/scout-liq/manual-payments', label: 'Pagos Manuales' },
   { to: '/scout-liq/bulk-scouts', label: 'Carga Masiva' },
   { to: '/scout-liq/schemes', label: 'Esquemas' },
+  { to: '/scout-liq/liquidador', label: 'Liquidador (legacy)' },
+  { to: '/scout-liq/pagos', label: 'Pagos (legacy)' },
+  { to: '/scout-liq/centro-carga', label: 'Centro Carga (legacy)' },
 ]
 
 const ALWAYS_ADVANCED_TABS = [
