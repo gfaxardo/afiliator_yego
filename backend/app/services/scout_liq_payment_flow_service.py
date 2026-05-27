@@ -316,6 +316,13 @@ def mark_cutoff_paid_flow(db: Session, cutoff_run_id: int, paid_by: Optional[str
                 blocks_future_payment=True,
                 reason=f"Pago desde corte #{cutoff_run_id}",
                 paid_by=paid_by,
+                rule_code=getattr(l, "rule_code", None) or config.get("rule_code"),
+                rule_type=getattr(l, "rule_type", None),
+                origin_scope=getattr(l, "origin_scope", None) or config.get("origin_scope"),
+                metric_code=getattr(l, "metric_code", None),
+                block_scope=getattr(l, "block_scope", None) or config.get("block_scope", "driver_global"),
+                support_only=getattr(l, "support_only", False),
+                scheme_version_id=config.get("scheme_version_id"),
             )
             db.add(ph)
             l.line_status = "paid"

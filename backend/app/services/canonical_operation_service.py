@@ -181,6 +181,7 @@ def get_canonical_operation_snapshot(
     scout_id: Optional[int] = None,
     attribution_status: Optional[str] = None,
     payment_status: Optional[str] = None,
+    search: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     scheme_type: Optional[str] = None,
@@ -215,6 +216,9 @@ def get_canonical_operation_snapshot(
         params["scout_filter"] = int(scout_id)
     if attribution_status == "unassigned":
         where_parts.append("src.driver_id NOT IN (SELECT da.driver_id FROM scout_liq_driver_assignments da WHERE da.status = 'active')")
+    if search and search.strip():
+        where_parts.append("(LOWER(COALESCE(src.driver_id,'')) LIKE :q OR LOWER(COALESCE(src.driver_nombre,'')) LIKE :q OR LOWER(COALESCE(src.driver_apellido,'')) LIKE :q OR LOWER(COALESCE(src.license,'')) LIKE :q)")
+        params["q"] = f"%{search.strip().lower()}%"
 
     where_clause = " AND ".join(where_parts)
 
@@ -246,6 +250,8 @@ def get_canonical_operation_snapshot(
             src.orders AS total_orders,
             src.status AS source_driver_status,
             COALESCE(src.updated_at::text, src.created_at::text, '') AS source_updated_at,
+            src.lead_created_at_cabinet::text AS lead_created_at_cabinet,
+            src.lead_created_at_fleet::text AS lead_created_at_fleet,
             {_lead_created_at_raw_expr("src")} AS lead_created_at_raw,
             src.hire_date::text AS hire_date_reference_raw,
             {dc} AS acquisition_anchor_date
@@ -262,7 +268,7 @@ def get_canonical_operation_snapshot(
 
     if not base_rows:
         return {
-            "total": total, "limit": limit, "offset": offset, "items": [],
+            "total": total, "limit": limit, "offset": offset, "has_next": False, "items": [],
             "freshness": _freshness_snapshot(db),
             "_timing_ms": {
                 "base_query": round((t2 - t1) * 1000),
@@ -320,6 +326,39 @@ def get_canonical_operation_snapshot(
         elif nombre:
             driver_name = nombre
 
+        # Anchor metadata: source, confidence, gap
+        origin_val = (dd.get("origin") or "").lower()
+        lead_cab = dd.get("lead_created_at_cabinet")
+        lead_fleet = dd.get("lead_created_at_fleet")
+        anchor_date_val = str(dd.get("acquisition_anchor_date")) if dd.get("acquisition_anchor_date") else None
+        hire_date_val = str(dd.get("hire_date")) if dd.get("hire_date") else dd.get("hire_date_raw")
+
+        if origin_val == "cabinet" and lead_cab and _re.match(r'\d{4}-\d{2}-\d{2}', str(lead_cab)):
+            anchor_source = "lead_cabinet"
+            anchor_confidence = "strong"
+            anchor_type = "lead_created_at"
+        elif origin_val == "fleet" and lead_fleet and _re.match(r'\d{4}-\d{2}-\d{2}', str(lead_fleet)):
+            anchor_source = "lead_fleet"
+            anchor_confidence = "strong"
+            anchor_type = "lead_created_at"
+        elif hire_date_val and _re.match(r'\d{4}-\d{2}-\d{2}', str(hire_date_val)):
+            anchor_source = "hire_date"
+            anchor_confidence = "medium"
+            anchor_type = "hire_date_fallback"
+        else:
+            anchor_source = "unknown"
+            anchor_confidence = "weak"
+            anchor_type = "unknown"
+
+        anchor_gap = None
+        if anchor_date_val and hire_date_val and anchor_date_val != hire_date_val:
+            try:
+                ad = datetime.strptime(anchor_date_val[:10], "%Y-%m-%d").date()
+                hd = datetime.strptime(str(hire_date_val)[:10], "%Y-%m-%d").date()
+                anchor_gap = abs((ad - hd).days)
+            except ValueError:
+                pass
+
         items.append({
             "driver_id": did,
             "driver_name": driver_name,
@@ -349,6 +388,16 @@ def get_canonical_operation_snapshot(
             "total_orders": dd.get("total_orders"),
             "source_driver_status": dd.get("source_driver_status"),
             "source_updated_at": dd.get("source_updated_at"),
+            "lead_created_at_cabinet": dd.get("lead_created_at_cabinet"),
+            "lead_created_at_fleet": dd.get("lead_created_at_fleet"),
+            "anchor_date": anchor_date_val,
+            "anchor_source": anchor_source,
+            "anchor_confidence": anchor_confidence,
+            "anchor_gap_days": anchor_gap,
+            "anchor_type": anchor_type,
+            "anchor_warning": "lead_created_at_missing" if anchor_confidence == "weak" else None,
+            "hire_date_reference": str(dd.get("hire_date")) if dd.get("hire_date") else dd.get("hire_date_raw"),
+            "date_basis": date_basis,
             # Payment placeholders
             "payment_status": "not_payable",
             "payment_origin": "none",
@@ -595,6 +644,7 @@ def get_canonical_operation_snapshot(
         "total": total,
         "limit": limit,
         "offset": offset,
+        "has_next": (offset + len(items)) < total,
         "items": items,
         "freshness": freshness,
         "_timing_ms": {

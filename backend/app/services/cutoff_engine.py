@@ -199,6 +199,15 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     fixed_payout_amount = config.get("fixed_payout_amount")
     minimum_enabled = config.get("minimum_enabled", True)
     is_fixed = payout_formula_type == "FIXED_PER_DRIVER"
+    is_aggregate = payout_formula_type == "AGGREGATE_VOLUME_BONUS"
+    cohort_target = config.get("cohort_target_count", 0) if is_aggregate else 0
+
+    # ── Rule traceability defaults ──
+    rule_code = config.get("rule_code", config.get("scheme_name", ""))
+    origin_scope_field = config.get("origin_scope", config.get("scheme_type", ""))
+    block_scope_val = config.get("block_scope", "driver_global")
+    metric_code_field = build_metric_code(quality_rule_str)
+    rule_type_field = "driver_milestone" if is_fixed else ("aggregate_volume_bonus" if is_aggregate else "cohort_quality_tier")
 
     # Clean previous lines/summaries
     db.query(CutoffDriverLine).filter(CutoffDriverLine.cutoff_run_id == cutoff_run_id).delete()
@@ -224,13 +233,19 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     if run.country_filter:
         assignments = assignments.filter(Scout.country == run.country_filter)
     assignments = assignments.all()
-
-    # Also get assignments from source table directly for hire_date
     all_driver_ids = list(set(a.driver_id for a, _ in assignments))
     if not all_driver_ids:
         return {"status": "no_assignments", "message": "No hay asignaciones activas en la ventana"}
 
-    # Compute real trip counts
+    if len(all_driver_ids) > 500:
+        return {
+            "status": "cutoff_too_large",
+            "code": "cutoff_too_large",
+            "message": f"Demasiados conductores ({len(all_driver_ids)}). Maximo 500. Reduce la ventana o usa procesamiento batch.",
+            "driver_count": len(all_driver_ids),
+            "max_allowed": 500,
+        }
+
     trip_counts = compute_trip_counts_batch(db, all_driver_ids)
 
     # Also get hire_date from source for drivers missing it in assignment
@@ -529,7 +544,20 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             blocked_reason = f"Minimo {min_volume} volumen requerido, tiene {total_activated}"
 
         # ── Payment formula ──
-        if is_fixed and fixed_payout_amount:
+        if is_aggregate:
+            tier_reached = None
+            payment_per = Decimal("0")
+            qualified_drivers = drivers_quality_hit if pays_on_rule == "QUALITY_HIT" else drivers_volume_base
+            if minimum_enabled and total_activated < min_volume:
+                amount = Decimal("0")
+                blocked_reason = f"Minimo {min_volume} volumen requerido, tiene {total_activated}"
+            elif qualified_drivers >= cohort_target:
+                amount = Decimal(str(fixed_payout_amount or 0))
+                blocked_reason = None
+            else:
+                amount = Decimal("0")
+                blocked_reason = f"Meta agregada {cohort_target} no alcanzada: {qualified_drivers} calificados"
+        elif is_fixed and fixed_payout_amount:
             tier_reached = None
             payment_per = Decimal(str(fixed_payout_amount))
             amount = Decimal(str(drivers_quality_hit if pays_on_rule == "QUALITY_HIT" else drivers_volume_base)) * payment_per if not blocked_reason else Decimal("0")
@@ -588,7 +616,39 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             pay_threshold = qual_min if pays_on_rule == "QUALITY_HIT" else vol_min
             driver_meets_pay_rule = trips_in_pay_window >= pay_threshold
 
-            if l.source_quality_status != "ok":
+            if is_aggregate and driver_meets_pay_rule and not blocked_reason:
+                l.line_status = "payable"
+                l.payment_status = "payable"
+                l.payout_eligible_flag = False
+                l.calculated_amount = Decimal("0")
+                l.payment_rule = f"Bono agregado S/{float(fixed_payout_amount or 0):.0f}"
+                l.eligible = True
+                l.payment_formula_explanation = (
+                    f"Driver {l.driver_id}: {trips_in_pay_window} viajes, cumple regla {pay_threshold}V"
+                    f"{qual_days if pays_on_rule == 'QUALITY_HIT' else vol_days}D. "
+                    f"Sustenta bono agregado S/{float(fixed_payout_amount or 0):.0f} "
+                    f"({qualified_drivers}/{cohort_target} calificados)."
+                )
+            elif is_aggregate and driver_meets_pay_rule and blocked_reason:
+                l.line_status = "blocked"
+                l.blocked_reason = blocked_reason
+                l.payment_status = "blocked"
+                l.eligible = False
+                l.payment_formula_explanation = (
+                    f"Driver {l.driver_id}: cumple regla pero {blocked_reason}."
+                )
+            elif is_aggregate and not driver_meets_pay_rule:
+                l.line_status = "below_pay_threshold"
+                l.payment_status = "blocked"
+                l.blocked_reason = f"no alcanza regla agregada ({pay_threshold}V{qual_days if pays_on_rule == 'QUALITY_HIT' else vol_days}D)"
+                l.eligible = False
+                l.payment_formula_explanation = (
+                    f"Driver {l.driver_id}: {trips_in_pay_window} viajes, "
+                    f"no alcanza {pay_threshold}V{qual_days if pays_on_rule == 'QUALITY_HIT' else vol_days}D. "
+                    f"No califica para el bono agregado."
+                )
+
+            elif l.source_quality_status != "ok":
                 l.line_status = "blocked_invalid_hire_date"
                 l.blocked_reason = "sin hire_date valida"
                 l.driver_lifecycle_status = "no_driver_id"
@@ -702,6 +762,35 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                         f"no alcanza regla {label} (requiere >= {pay_threshold}). No paga."
                     )
 
+    # ── Assign rule traceability to all lines ──
+    for _, g in scout_groups.items():
+        for l in g["lines"]:
+            l.rule_code = rule_code
+            l.rule_type = rule_type_field
+            l.origin_scope = origin_scope_field
+            l.metric_code = metric_code_field
+            l.block_scope = block_scope_val
+            l.support_only = is_aggregate and l.payout_eligible_flag and l.calculated_amount == 0
+            # ── Metric window audit ──
+            if hasattr(l, 'date_basis'):
+                l.date_basis = "anchor_date"
+            if hasattr(l, 'anchor_fallback_used'):
+                l.anchor_fallback_used = False
+            if hasattr(l, 'metric_window_start'):
+                l.metric_window_start = l.acquisition_anchor_date
+            if hasattr(l, 'metric_window_end'):
+                l.metric_window_end = l.acquisition_anchor_date
+                if l.acquisition_anchor_date and (vol_days or qual_days):
+                    window = qual_days if pays_on_rule == "QUALITY_HIT" else vol_days
+                    try:
+                        from datetime import timedelta
+                        ad_date = l.acquisition_anchor_date
+                        if isinstance(ad_date, str):
+                            ad_date = datetime.strptime(ad_date[:10], "%Y-%m-%d").date()
+                        l.metric_window_end = ad_date + timedelta(days=window)
+                    except Exception:
+                        pass
+
     # ── Fase 2A.2: Payment anchor guardrails ──
     # Override payout for drivers without official anchor
     anchor_blocks = 0
@@ -755,7 +844,34 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     return {"status": "calculated", "cutoff_run_id": cutoff_run_id, "scouts_evaluated": len(scout_groups)}
 
 
-def check_already_paid(db: Session, driver_id: str) -> bool:
+def check_already_paid(db: Session, driver_id: str, rule_code: Optional[str] = None,
+                       metric_code: Optional[str] = None, origin_scope: Optional[str] = None,
+                       block_scope_check: Optional[str] = None) -> bool:
+    """Check if driver was already paid, respecting block_scope.
+    driver_global: any blocks_future_payment=true blocks.
+    driver_rule: same rule_code blocks.
+    driver_metric_origin: same metric_code + origin_scope blocks.
+    none: never blocks.
+    """
+    if block_scope_check == "none":
+        return False
+    
+    if rule_code and block_scope_check and block_scope_check != "driver_global":
+        params = {"did": driver_id, "rc": rule_code}
+        extra = ""
+        if block_scope_check == "driver_rule":
+            extra = " AND ph.rule_code = :rc"
+        elif block_scope_check == "driver_metric_origin" and metric_code and origin_scope:
+            extra = " AND ph.metric_code = :mc AND ph.origin_scope = :os"
+            params["mc"] = metric_code
+            params["os"] = origin_scope
+        row = db.execute(
+            text(f"SELECT COUNT(*) FROM scout_liq_paid_history ph WHERE ph.driver_id = :did AND ph.blocks_future_payment = true{extra}"),
+            params,
+        ).scalar()
+        return (row or 0) > 0
+    
+    # default: driver_global — any blocks_future_payment=true blocks
     row = db.execute(
         text("SELECT COUNT(*) FROM scout_liq_paid_history WHERE driver_id = :did AND blocks_future_payment = true"),
         {"did": driver_id},
@@ -865,6 +981,18 @@ def get_cutoff_lines(db: Session, cutoff_run_id: int, scout_id: Optional[int] = 
             "observed_affiliation_id": l.observed_affiliation_id,
             "line_observation_status": l.line_observation_status,
             "line_explanation": l.line_explanation,
+            # ── Rule traceability ──
+            "rule_code": l.rule_code,
+            "rule_type": l.rule_type,
+            "origin_scope": l.origin_scope,
+            "metric_code": l.metric_code,
+            "block_scope": l.block_scope,
+            "support_only": l.support_only if hasattr(l, 'support_only') else False,
+            # ── Metric window audit ──
+            "anchor_fallback_used": getattr(l, 'anchor_fallback_used', None),
+            "metric_window_start": str(l.metric_window_start) if hasattr(l, 'metric_window_start') and l.metric_window_start else None,
+            "metric_window_end": str(l.metric_window_end) if hasattr(l, 'metric_window_end') and l.metric_window_end else None,
+            "date_basis": getattr(l, 'date_basis', None),
             # ── Fase 2: Anchor fields ──
             "acquisition_anchor_date": str(l.acquisition_anchor_date) if l.acquisition_anchor_date else None,
             "anchor_source": l.anchor_source,
@@ -1558,6 +1686,11 @@ def _build_config_snapshot_from_resolved(resolved: dict) -> str:
         "fixed_payout_amount": resolved.get("fixed_payout_amount"),
         "minimum_enabled": resolved.get("minimum_enabled", True),
         "formula_type_label": f"Pago fijo S/{float(resolved['fixed_payout_amount']):.0f} por driver" if resolved.get("fixed_payout_amount") is not None else "Conversion por tramo",
+        "rule_type": "driver_milestone" if resolved.get("payout_formula_type", resolved["formula_type"]) == "FIXED_PER_DRIVER" else ("aggregate_volume_bonus" if resolved.get("payout_formula_type", resolved["formula_type"]) == "AGGREGATE_VOLUME_BONUS" else "cohort_quality_tier"),
+        "rule_type_label": "Pago por hito individual del conductor" if resolved.get("payout_formula_type", resolved["formula_type"]) == "FIXED_PER_DRIVER" else ("Bono agregado por volumen/cohorte" if resolved.get("payout_formula_type", resolved["formula_type"]) == "AGGREGATE_VOLUME_BONUS" else "Pago por calidad del scout/cohorte"),
+        "origin_scope": resolved.get("scheme_type", ""),
+        "block_scope": resolved.get("block_scope", "driver_global"),
+        "cohort_target_count": resolved.get("cohort_target_count", 0),
         "frozen_at": datetime.now().isoformat(),
     })
 

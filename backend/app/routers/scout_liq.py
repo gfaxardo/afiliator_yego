@@ -767,15 +767,29 @@ def create_cutoff(
             date_basis=date_basis,
         )
         result = calculate_cutoff(db, run.id)
-        return {
+        if isinstance(result, dict) and result.get("code") == "cutoff_too_large":
+            response = {
+                "cutoff_run_id": run.id,
+                "cutoff_name": run.cutoff_name,
+                "status": run.status,
+                "date_basis": run.date_basis,
+                "calculation": result,
+                "warning": "legacy_cutoff_without_rule_type — use /cutoffs/from-cohort or /cutoffs/sweep for versioned rule snapshots",
+            }
+            return response
+        response = {
             "cutoff_run_id": run.id,
             "cutoff_name": run.cutoff_name,
             "status": run.status,
             "date_basis": run.date_basis,
             "calculation": result,
+            "warning": "legacy_cutoff_without_rule_type — use /cutoffs/from-cohort or /cutoffs/sweep for versioned rule snapshots",
         }
+        return response
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Legacy cutoff error: {str(e)}")
 
 
 @router.post("/cutoffs/from-cohort")
@@ -1014,7 +1028,8 @@ def mark_paid_endpoint(cutoff_id: int, db: Session = Depends(get_db)):
 @router.get("/cutoffs/{cutoff_id}/export.csv")
 def export_cutoff_csv(cutoff_id: int, db: Session = Depends(get_db)):
     summaries = get_cutoff_summary(db, cutoff_id)
-    lines_rows = get_cutoff_lines(db, cutoff_id)
+    lines_result = get_cutoff_lines(db, cutoff_id)
+    lines_rows = lines_result.get("lines", []) if isinstance(lines_result, dict) else (lines_result or [])
 
     csv_output = io.StringIO()
     csv_output.write("# Resumen por Scout\r\n")
@@ -1028,10 +1043,14 @@ def export_cutoff_csv(cutoff_id: int, db: Session = Depends(get_db)):
             f"{s['amount_calculated']:.2f},{s['status']}\r\n"
         )
     csv_output.write("\r\n# Lineas por Driver\r\n")
-    csv_output.write("driver_id,scout_id,hire_date,origen,trips_0_7,trips_8_14,trips_0_14,orders,hito,estado,motivo\r\n")
+    csv_output.write("driver_id,scout_id,hire_date,origen,anchor_date,anchor_source,anchor_confidence,date_basis,anchor_fallback_used,anchor_warning,metric_window_start,metric_window_end,trips_0_7,trips_8_14,trips_0_14,orders,hito,estado,motivo\r\n")
     for l in lines_rows:
         csv_output.write(
             f"{l['driver_id']},{l['scout_id']},{l['hire_date'] or ''},{l['origin'] or ''},"
+            f"{l.get('acquisition_anchor_date') or ''},{l.get('anchor_source') or ''},{l.get('anchor_confidence') or ''},"
+            f"{l.get('date_basis') or 'anchor_date'},"
+            f"{'Si' if l.get('anchor_fallback_used') else 'No'},{l.get('anchor_warning') or ''},"
+            f"{l.get('metric_window_start') or ''},{l.get('metric_window_end') or ''},"
             f"{l['trips_0_7_count'] or 0},{l['trips_8_14_count'] or 0},{l['trips_0_14_count'] or 0},"
             f"{l['total_orders'] or ''},{'Si' if l['is_converted_5trips_7d'] else 'No'},"
             f"{l['line_status']},{l['blocked_reason'] or ''}\r\n"
@@ -1229,8 +1248,10 @@ def export_payment_xlsx(cutoff_run_id: int, db: Session = Depends(get_db)):
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f"attachment; filename=payment_{cutoff_run_id}.xlsx"},
         )
-    except ValueError as e:
+    except (ValueError, ImportError) as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail="XLSX export not available: " + str(e)[:200])
 
 
 @router.get("/reports/scout/{scout_id}")
@@ -2543,6 +2564,7 @@ def operation_canonical_snapshot(
     scout_id: Optional[int] = Query(None),
     attribution_status: Optional[str] = Query(None),
     payment_status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, description="Texto para buscar en driver_id, nombre, apellido, licencia"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     scheme_type: Optional[str] = Query(None, description="cabinet | fleet | custom"),
@@ -2561,6 +2583,7 @@ def operation_canonical_snapshot(
         scout_id=scout_id,
         attribution_status=attribution_status,
         payment_status=payment_status,
+        search=search,
         limit=limit,
         offset=offset,
         scheme_type=scheme_type,
@@ -2704,6 +2727,8 @@ def api_create_payment_scheme_version(
             maturity_window_days=body.maturity_window_days,
             fixed_payout_amount=body.fixed_payout_amount,
             minimum_enabled=body.minimum_enabled,
+            block_scope=body.block_scope,
+            cohort_target_count=body.cohort_target_count,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

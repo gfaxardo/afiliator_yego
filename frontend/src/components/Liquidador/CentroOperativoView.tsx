@@ -7,7 +7,9 @@ import {
   getPaymentExportCsvUrl, getPaymentExportXlsxUrl,
   getPaidHistory, getDashboardAlerts, getCutoffExportFinancialUrl,
   getOperationFilters,
+  getCanonicalOperation, type CanonicalDriver, type CanonicalFreshness,
 } from '../../api/scoutLiq'
+import DriverDetailDrawer from './DriverDetailDrawer'
 import {
   previewUnifiedLoadStream, applyUnifiedLoadStream, downloadTemplate,
   type UnifiedApplyLine, type UnifiedApplySummary,
@@ -25,6 +27,15 @@ const YELLOW = { bg: 'bg-amber-50', border: 'border-amber-300', text: 'text-ambe
 const RED = { bg: 'bg-red-50', border: 'border-red-300', text: 'text-red-700', badge: 'bg-red-100 text-red-800', dot: 'bg-red-500' }
 const BLUE = { bg: 'bg-blue-50', border: 'border-blue-300', text: 'text-blue-700', badge: 'bg-blue-100 text-blue-800', dot: 'bg-blue-500' }
 const GRAY = { bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-500', badge: 'bg-gray-100 text-gray-600', dot: 'bg-gray-400' }
+
+const ANCHOR_SOURCE_LABEL: Record<string, string> = {
+  lead_cabinet: 'Lead Cabinet', lead_fleet: 'Lead Fleet', hire_date: 'Hire date', unknown: '---',
+}
+const ANCHOR_CONFIDENCE_COLOR: Record<string, string> = {
+  strong: 'bg-emerald-100 text-emerald-700', medium: 'bg-amber-100 text-amber-700', weak: 'bg-red-100 text-red-600', unknown: 'bg-gray-100 text-gray-400',
+}
+const COL_GROUP_KEYS = ['driver', 'anchor', 'attribution', 'progress', 'payment', 'risk'] as const
+type ColGroup = typeof COL_GROUP_KEYS[number]
 
 // ═══════════════════════════════════════════════════════════════
 // TYPES
@@ -156,6 +167,43 @@ export default function CentroOperativoView() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
+  // ── Driver Table ──
+  const [drivers, setDrivers] = useState<CanonicalDriver[]>([])
+  const [driversLoading, setDriversLoading] = useState(true)
+  const [driversTotal, setDriversTotal] = useState(0)
+  const [driversHasNext, setDriversHasNext] = useState(false)
+  const [driversFreshness, setDriversFreshness] = useState<CanonicalFreshness | null>(null)
+  const [driverPage, setDriverPage] = useState(0)
+  const [driverSearch, setDriverSearch] = useState('')
+  const [driverOriginFilter, setDriverOriginFilter] = useState('')
+  const [driverLifecycleFilter, setDriverLifecycleFilter] = useState('')
+  const [driverTagFilter, setDriverTagFilter] = useState<string | null>(null)
+  const [selectedDriver, setSelectedDriver] = useState<CanonicalDriver | null>(null)
+  const [driversPageSize, setDriversPageSize] = useState(100)
+
+  // ── Advanced filters ──
+  const [showFilters, setShowFilters] = useState(false)
+  const [filterAnchorSource, setFilterAnchorSource] = useState('')
+  const [filterAnchorConfidence, setFilterAnchorConfidence] = useState('')
+  const [filterHasWarning, setFilterHasWarning] = useState('')
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState('')
+  const [filterScoutId, setFilterScoutId] = useState('')
+  const [filterBlockReason, setFilterBlockReason] = useState('')
+  const [filterMinTrips7d, setFilterMinTrips7d] = useState(0)
+  const [sortField, setSortField] = useState('anchor_date')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  // ── Scouts list for filter ──
+  const [scoutsList, setScoutsList] = useState<{ id: number; scout_name: string; scout_type: string | null; city: string | null }[]>([])
+  const [scoutFilterSearch, setScoutFilterSearch] = useState('')
+
+  // ── Column visibility ──
+  const [visibleCols, setVisibleCols] = useState<Set<ColGroup>>(new Set(COL_GROUP_KEYS))
+  const [showColSelector, setShowColSelector] = useState(false)
+
+  // ── Workflow collapsed ──
+  const [showWorkflow, setShowWorkflow] = useState(false)
+
   // ── Utils ──
   const showMsg = useCallback((msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(null), 4000) }, [])
   const showErr = useCallback((msg: string) => { setError(msg); setTimeout(() => setError(null), 8000) }, [])
@@ -184,6 +232,193 @@ export default function CentroOperativoView() {
       .finally(() => { if (!cancelled) setLoadingInitial(false) })
     return () => { cancelled = true }
   }, [])
+
+  // ═══════════════════════════════════════════════════════════════
+  // DRIVER TABLE DATA
+  // ═══════════════════════════════════════════════════════════════
+
+  function deriveDriverLifecycle(row: CanonicalDriver): string {
+    if (row.attribution_status === 'unassigned') return 'sin_scout'
+    if (row.converted_5v14d) return 'converted_5v14d'
+    if (row.converted_5v7d) return 'converted_5v7d'
+    if (row.activated_flag) return 'activated'
+    if (row.driver_id) return 'no_trips'
+    return 'no_driver_id'
+  }
+
+  function getDriverTags(row: CanonicalDriver): { key: string; label: string; color: string }[] {
+    const tags: { key: string; label: string; color: string }[] = []
+    if (row.attribution_status === 'unassigned') tags.push({ key: 'sin_scout', label: 'Sin scout', color: 'bg-yellow-100 text-yellow-700' })
+    if (row.payment_status === 'paid') tags.push({ key: 'ya_pagado', label: 'Ya pagado', color: 'bg-teal-100 text-teal-700' })
+    if (row.reason === 'manual_review') tags.push({ key: 'manual_review', label: 'Revision manual', color: 'bg-orange-100 text-orange-700' })
+    if (row.source_driver_status === 'weak') tags.push({ key: 'fuente_debil', label: 'Fuente debil', color: 'bg-red-100 text-red-700' })
+    if (row.converted_5v7d) tags.push({ key: 'cumple_calidad', label: '5V/7D', color: 'bg-blue-100 text-blue-700' })
+    if (!row.activated_flag && row.driver_id) tags.push({ key: 'no_convierte', label: 'No activa', color: 'bg-gray-100 text-gray-500' })
+    return tags
+  }
+
+  const DRIVER_LIFECYCLE_OPTIONS = [
+    { key: '', label: 'Todos los estados' },
+    { key: 'no_driver_id', label: 'Sin ID' },
+    { key: 'no_trips', label: 'Sin viajes' },
+    { key: 'sin_scout', label: 'Sin scout' },
+    { key: 'activated', label: 'Activado' },
+    { key: 'converted_5v7d', label: '5V/7D' },
+    { key: 'converted_5v14d', label: '5V/14D' },
+  ]
+
+  const DRIVER_LIFECYCLE_LABELS: Record<string, string> = {
+    no_driver_id: 'SIN ID', no_trips: 'SIN VIAJES', sin_scout: 'SIN SCOUT',
+    activated: 'ACTIVADO', converted_5v7d: '5V/7D', converted_5v14d: '5V/14D',
+  }
+  const DRIVER_LIFECYCLE_COLORS: Record<string, string> = {
+    no_driver_id: 'bg-red-100 text-red-700', no_trips: 'bg-gray-100 text-gray-500',
+    sin_scout: 'bg-yellow-100 text-yellow-700', activated: 'bg-green-100 text-green-700',
+    converted_5v7d: 'bg-blue-100 text-blue-700', converted_5v14d: 'bg-purple-100 text-purple-700',
+  }
+  const DRIVER_LIFECYCLE_BORDER: Record<string, string> = {
+    sin_scout: 'border-l-4 border-l-yellow-400',
+    converted_5v7d: 'border-l-4 border-l-blue-400',
+    converted_5v14d: 'border-l-4 border-l-purple-400',
+    activated: 'border-l-4 border-l-green-400',
+  }
+
+  const loadDrivers = useCallback(async (page: number, append = false, pageSize: number = driversPageSize) => {
+    setDriversLoading(true)
+    try {
+      const params: any = { limit: pageSize, offset: page * pageSize }
+      if (driverOriginFilter) params.origin = driverOriginFilter
+      if (filterScoutId && filterScoutId !== 'none') params.scout_id = Number(filterScoutId)
+      if (filterScoutId === 'none') params.attribution_status = 'unassigned'
+      if (driverSearch && driverSearch.trim()) params.search = driverSearch.trim()
+      const result = await getCanonicalOperation(params)
+      const items: CanonicalDriver[] = result.items || []
+      if (append) setDrivers(prev => [...prev, ...items])
+      else setDrivers(items)
+      setDriversTotal(result.total || 0)
+      setDriversHasNext(result.has_next || false)
+      setDriversFreshness(result.freshness || null)
+    } catch (e: any) { setError(e?.response?.data?.detail || e.message) }
+    finally { setDriversLoading(false) }
+  }, [driverOriginFilter, filterScoutId, driverSearch, driversPageSize])
+
+  useEffect(() => {
+    if (loadingInitial) return
+    setDriverPage(0)
+    loadDrivers(0)
+  }, [loadingInitial, driverOriginFilter, filterScoutId])
+
+  // Debounced search -> server-side
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(driverSearch), 400)
+    return () => clearTimeout(t)
+  }, [driverSearch])
+  useEffect(() => {
+    if (loadingInitial) return
+    setDriverPage(0)
+    loadDrivers(0)
+  }, [debouncedSearch])
+
+  // Load scouts for filter
+  useEffect(() => {
+    if (loadingInitial) return
+    getScouts({ status: 'active' }).then(list => {
+      setScoutsList(list.map(s => ({ id: s.id, scout_name: s.scout_name, scout_type: s.scout_type, city: s.city })))
+    }).catch(() => setScoutsList([]))
+  }, [loadingInitial])
+
+  const filteredDrivers = useMemo(() => {
+    let filtered = [...drivers]
+    if (driverSearch) {
+      const q = driverSearch.toLowerCase()
+      filtered = filtered.filter(d =>
+        (d.driver_id || '').toLowerCase().includes(q) ||
+        (d.driver_name || '').toLowerCase().includes(q) ||
+        (d.license || '').toLowerCase().includes(q) ||
+        (d.scout_name || '').toLowerCase().includes(q)
+      )
+    }
+    if (driverLifecycleFilter) {
+      filtered = filtered.filter(d => deriveDriverLifecycle(d) === driverLifecycleFilter)
+    }
+    if (driverTagFilter) {
+      filtered = filtered.filter(d => getDriverTags(d).some(t => t.key === driverTagFilter))
+    }
+    if (filterAnchorSource) {
+      filtered = filtered.filter(d => (d.anchor_source || '') === filterAnchorSource)
+    }
+    if (filterAnchorConfidence) {
+      filtered = filtered.filter(d => (d.anchor_confidence || '') === filterAnchorConfidence)
+    }
+    if (filterHasWarning === 'yes') {
+      filtered = filtered.filter(d => (d.payment_trace_warning || d.reason === 'manual_review'))
+    } else if (filterHasWarning === 'no') {
+      filtered = filtered.filter(d => !d.payment_trace_warning && d.reason !== 'manual_review')
+    }
+    if (filterPaymentStatus) {
+      filtered = filtered.filter(d => (d.payment_status || '') === filterPaymentStatus)
+    }
+    if (filterBlockReason) {
+      filtered = filtered.filter(d => (d.reason || '') === filterBlockReason || d.payment_trace_status === filterBlockReason)
+    }
+    if (filterMinTrips7d > 0) {
+      filtered = filtered.filter(d => d.trips_7d >= filterMinTrips7d)
+    }
+    if (filterScoutId) {
+      if (filterScoutId === 'none') {
+        filtered = filtered.filter(d => !d.scout_id)
+      } else {
+        filtered = filtered.filter(d => d.scout_id?.toString() === filterScoutId)
+      }
+    }
+    // Sort
+    filtered.sort((a, b) => {
+      let cmp = 0
+      const mul = sortDir === 'desc' ? -1 : 1
+      if (sortField === 'anchor_date') {
+        const da = a.anchor_date || a.hire_date || ''
+        const db = b.anchor_date || b.hire_date || ''
+        cmp = da.localeCompare(db) * mul
+      } else if (sortField === 'hire_date') {
+        cmp = ((a.hire_date || '') > (b.hire_date || '') ? 1 : -1) * mul
+      } else if (sortField === 'scout') {
+        cmp = ((a.scout_name || '') > (b.scout_name || '') ? 1 : -1) * mul
+      } else if (sortField === 'driver_name') {
+        cmp = ((a.driver_name || '') > (b.driver_name || '') ? 1 : -1) * mul
+      } else if (sortField === 'anchor_confidence') {
+        const order = { strong: 0, medium: 1, weak: 2, unknown: 3 }
+        cmp = ((order[a.anchor_confidence || 'unknown'] || 9) - (order[b.anchor_confidence || 'unknown'] || 9)) * mul
+      }
+      return cmp
+    })
+    return filtered
+  }, [drivers, driverSearch, driverLifecycleFilter, driverTagFilter, filterAnchorSource, filterAnchorConfidence, filterHasWarning, filterPaymentStatus, filterBlockReason, filterMinTrips7d, filterScoutId, sortField, sortDir])
+
+  const driverTagCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const d of drivers) {
+      for (const tag of getDriverTags(d)) {
+        counts[tag.key] = (counts[tag.key] || 0) + 1
+      }
+    }
+    return counts
+  }, [drivers])
+
+  const driverKpis = useMemo(() => {
+    const total = driversTotal
+    const assigned = drivers.filter(d => d.attribution_status === 'assigned').length
+    const unassigned = drivers.filter(d => d.attribution_status === 'unassigned').length
+    const activated = drivers.filter(d => d.activated_flag).length
+    const converted7 = drivers.filter(d => d.converted_5v7d).length
+    const converted14 = drivers.filter(d => d.converted_5v14d).length
+    const payable = drivers.filter(d => d.payment_status === 'payable').length
+    const paid = drivers.filter(d => d.payment_status === 'paid').length
+    const blocked = drivers.filter(d => d.payment_status === 'no_payable' && d.reason && d.reason !== 'ok' && d.reason !== 'no_activation').length
+    const manualReview = drivers.filter(d => d.reason === 'manual_review').length
+    const weakSource = drivers.filter(d => d.anchor_confidence === 'weak').length
+    return { total, assigned, unassigned, activated, converted7, converted14, payable, paid, blocked, manualReview, weakSource }
+  }, [drivers, driversTotal])
 
   // ═══════════════════════════════════════════════════════════════
   // DERIVED: Step statuses
@@ -414,7 +649,7 @@ export default function CentroOperativoView() {
 
   if (loadingInitial) {
     return (
-      <div className="max-w-5xl mx-auto space-y-4 p-6">
+      <div className="max-w-7xl mx-auto space-y-4 p-6">
         <Skeleton w="w-48" h="h-7" />
         <Skeleton w="w-full" h="h-12" />
         <Skeleton w="w-full" h="h-64" />
@@ -423,7 +658,7 @@ export default function CentroOperativoView() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="px-3">
       {/* ── ALERTS ── */}
       {error && (
         <div className="mb-2 px-4 py-2.5 bg-red-50 border border-red-300 rounded-lg text-sm text-red-700 flex items-center justify-between">
@@ -435,90 +670,534 @@ export default function CentroOperativoView() {
         <div className="mb-2 px-4 py-2.5 bg-emerald-50 border border-emerald-300 rounded-lg text-sm text-emerald-700">{success}</div>
       )}
 
-      {/* ── STICKY HEADER BAR (P7: Layout Dominance) ── */}
-      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-gray-200 -mx-4 px-4 py-2 mb-3 shadow-sm">
+      {/* ── STICKY HEADER ── */}
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-gray-200 -mx-3 px-3 py-2 mb-2 shadow-sm">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div className="flex items-center gap-3">
-            <h2 className="text-lg font-bold text-gray-800">Centro Operativo</h2>
-            {/* Density toggle (P10) */}
+            <h2 className="text-sm font-bold text-gray-800">Centro Operativo</h2>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 font-medium">Operacion</span>
             <button onClick={() => setDensity(d => d === 'comfortable' ? 'compact' : 'comfortable')}
-              className="text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-2 py-0.5"
-              title="Alternar densidad"
-            >
+              className="text-[10px] text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-2 py-0.5">
               {density === 'comfortable' ? 'Compacto' : 'Comodo'}
             </button>
+            <span className="text-[10px] text-gray-300">|</span>
+            <button onClick={() => setShowFilters(!showFilters)}
+              className={`text-[10px] font-medium px-2 py-0.5 rounded border ${showFilters ? 'bg-gray-800 text-white border-gray-800' : 'border-gray-200 text-gray-500 hover:bg-gray-100'}`}>
+              Filtros {showFilters ? '▲' : '▼'}
+            </button>
+            <div className="relative">
+              <button onClick={() => setShowColSelector(!showColSelector)}
+                className="text-[10px] font-medium px-2 py-0.5 rounded border border-gray-200 text-gray-500 hover:bg-gray-100">
+                Columnas
+              </button>
+              {showColSelector && (
+                <div className="absolute left-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50 w-40 py-1">
+                  {COL_GROUP_KEYS.map(g => (
+                    <label key={g} className="flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-gray-50 cursor-pointer">
+                      <input type="checkbox" checked={visibleCols.has(g)}
+                        onChange={() => {
+                          const next = new Set(visibleCols)
+                          next.has(g) ? next.delete(g) : next.add(g)
+                          setVisibleCols(next)
+                        }}
+                        className="rounded w-3 h-3" />
+                      <span className="text-gray-600 capitalize">{g === 'driver' ? 'Conductor' : g === 'anchor' ? 'Fecha ancla' : g === 'attribution' ? 'Atribucion' : g === 'progress' ? 'Progreso' : g === 'payment' ? 'Pago' : 'Riesgo'}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-          {/* Quick summary KPI pills */}
-          <div className="flex items-center gap-2 flex-wrap text-xs">
-            {summaryKpi.blocked > 0 && <span className={`px-2 py-0.5 rounded-full font-semibold ${RED.badge}`}><Dot color={RED.dot} /> {summaryKpi.blocked} bloqueados</span>}
-            {summaryKpi.warnings > 0 && <span className={`px-2 py-0.5 rounded-full font-semibold ${YELLOW.badge}`}><Dot color={YELLOW.dot} /> {summaryKpi.warnings} warnings</span>}
-            {summaryKpi.activeCutoffs > 0 && <span className={`px-2 py-0.5 rounded-full font-semibold ${BLUE.badge}`}>{summaryKpi.activeCutoffs} cortes activos</span>}
-            {summaryKpi.readyExport > 0 && <span className={`px-2 py-0.5 rounded-full font-semibold ${GREEN.badge}`}>{summaryKpi.readyExport} listos exportar</span>}
-            {!summaryKpi.blocked && !summaryKpi.warnings && !summaryKpi.activeCutoffs && <span className="text-gray-400">Sin actividad</span>}
+          {/* KPI pills */}
+          <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+            <span className="font-bold text-gray-700">{driversTotal} drivers</span>
+            {driverKpis.unassigned > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold ${YELLOW.badge}`}>{driverKpis.unassigned} sin scout</span>}
+            {driverKpis.activated > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold ${BLUE.badge}`}>{driverKpis.activated} activ.</span>}
+            {driverKpis.converted7 > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold bg-indigo-100 text-indigo-700`}>{driverKpis.converted7} 5V/7D</span>}
+            {driverKpis.converted14 > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold bg-purple-100 text-purple-700`}>{driverKpis.converted14} 5V/14D</span>}
+            {driverKpis.payable > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold ${GREEN.badge}`}>{driverKpis.payable} pagables</span>}
+            {driverKpis.paid > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold bg-teal-100 text-teal-700`}>{driverKpis.paid} pagados</span>}
+            {driverKpis.blocked > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold ${RED.badge}`}>{driverKpis.blocked} bloq.</span>}
+            {driverKpis.manualReview > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold bg-orange-100 text-orange-700`}>{driverKpis.manualReview} rev.</span>}
+            {driverKpis.weakSource > 0 && <span className={`px-1.5 py-0.5 rounded-full font-semibold bg-red-100 text-red-600`}>{driverKpis.weakSource} debil</span>}
           </div>
         </div>
       </div>
 
-      {/* ── QUICK FILTERS (P5: Operational Speed) ── */}
-      <div className="flex items-center gap-1.5 mb-3 flex-wrap">
-        {(['all', 'blocked', 'warnings', 'trusted', 'pending'] as const).map(f => (
-          <button key={f} onClick={() => setQuickFilter(f)}
-            className={`px-3 py-1 text-[11px] rounded-full font-medium transition-colors ${quickFilter === f ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
-          >
-            {f === 'all' ? 'Todo' : f === 'blocked' ? 'Bloqueados' : f === 'warnings' ? 'Warnings' : f === 'trusted' ? 'Confiables' : 'Pendientes revision'}
-          </button>
-        ))}
-      </div>
-
-      {/* ── ATTENTION CARDS (P1: Attention Hierarchy — Level 1 first) ── */}
-      {(quickFilter === 'all' || quickFilter === 'blocked') && attentionCards.filter(c => c.level === 'critical').map(card => (
-        <AttentionCard key={card.id} card={card} />
-      ))}
-      {(quickFilter === 'all' || quickFilter === 'warnings') && attentionCards.filter(c => c.level === 'warning').map(card => (
-        <AttentionCard key={card.id} card={card} />
-      ))}
-      {(quickFilter === 'all' || quickFilter === 'pending' || quickFilter === 'trusted') && attentionCards.filter(c => c.level === 'operational').map(card => (
-        <AttentionCard key={card.id} card={card} />
-      ))}
-
-      {/* ── WORKFLOW STEPPER (P3: Workflow Focus + P2: Progressive Disclosure) ── */}
-      <div ref={stepperRef} className={`bg-white border border-gray-200 rounded-xl shadow-sm mb-4 ${pad}`}>
-        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Workflow operativo</h3>
-        <div className={`flex flex-col ${gap}`}>
-          {steps.map((step, idx) => {
-            const isExpanded = expandedSteps.has(step.id)
-            const colorSet = step.status === 'completed' ? GREEN : step.status === 'blocked' ? RED : step.status === 'in_progress' ? BLUE : step.status === 'ready' ? YELLOW : GRAY
-            const canExpand = step.enabled || step.status === 'completed'
-
-            return (
-              <div key={step.id}>
-                <button onClick={() => canExpand && toggleStep(step.id)}
-                  disabled={!canExpand}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all ${!canExpand ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:shadow-sm'} ${colorSet.border} ${colorSet.bg}`}
-                >
-                  <span className="text-base w-6 text-center font-bold flex-shrink-0">{STATUS_ICON[step.status]}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-xs">{idx + 1}. {step.label}</span>
-                      {step.pendingCount > 0 && <Badge label={`${step.pendingCount}`} color={colorSet.badge} />}
-                    </div>
-                    {density === 'comfortable' && <p className="text-[11px] mt-0.5 opacity-70">{step.subtext || step.description}</p>}
-                  </div>
-                  <span className="text-[10px] font-medium flex-shrink-0 hidden sm:inline opacity-60">{step.ctaLabel}</span>
-                  <span className="text-xs flex-shrink-0">{canExpand ? (isExpanded ? '▲' : '▼') : '·'}</span>
+      {/* ── ADVANCED FILTER PANEL ── */}
+      {showFilters && (
+        <div className="bg-white border border-gray-200 rounded-lg mb-2 p-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+            {/* Search */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Buscar</label>
+              <input type="text" value={driverSearch} onChange={e => setDriverSearch(e.target.value)}
+                placeholder="Driver, nombre, licencia..."
+                className="w-full border rounded px-2 py-1 text-[11px] focus:outline-none focus:border-blue-400" />
+            </div>
+            {/* Origin */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Origen</label>
+              <select value={driverOriginFilter} onChange={e => setDriverOriginFilter(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                <option value="">Todos</option>
+                <option value="cabinet">Cabinet</option>
+                <option value="fleet">Flota</option>
+              </select>
+            </div>
+            {/* Anchor source */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Fuente ancla</label>
+              <select value={filterAnchorSource} onChange={e => setFilterAnchorSource(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                <option value="">Todas</option>
+                <option value="lead_cabinet">Lead Cabinet</option>
+                <option value="lead_fleet">Lead Fleet</option>
+                <option value="hire_date">Hire date</option>
+              </select>
+            </div>
+            {/* Anchor confidence */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Confianza</label>
+              <select value={filterAnchorConfidence} onChange={e => setFilterAnchorConfidence(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                <option value="">Todas</option>
+                <option value="strong">Strong</option>
+                <option value="medium">Medium</option>
+                <option value="weak">Weak</option>
+              </select>
+            </div>
+            {/* Warning */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Warning</label>
+              <select value={filterHasWarning} onChange={e => setFilterHasWarning(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                <option value="">Todos</option>
+                <option value="yes">Con warning</option>
+                <option value="no">Sin warning</option>
+              </select>
+            </div>
+            {/* Payment status */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Pago</label>
+              <select value={filterPaymentStatus} onChange={e => setFilterPaymentStatus(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                <option value="">Todos</option>
+                <option value="payable">Pagable</option>
+                <option value="paid">Pagado</option>
+                <option value="no_payable">No pagable</option>
+              </select>
+            </div>
+            {/* Block reason */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Bloqueo</label>
+              <select value={filterBlockReason} onChange={e => setFilterBlockReason(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                <option value="">Todos</option>
+                <option value="no_scout">Sin scout</option>
+                <option value="already_paid">Ya pagado</option>
+                <option value="manual_review">Manual review</option>
+                <option value="no_activation">Sin activacion</option>
+                <option value="tier_not_reached">No alcanzo tier</option>
+                <option value="min_activated_not_reached">Min. no alcanzado</option>
+              </select>
+            </div>
+            {/* Scout */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Scout</label>
+              <select value={filterScoutId} onChange={e => setFilterScoutId(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                <option value="">Todos</option>
+                <option value="none">Sin scout</option>
+                {scoutsList.map(s => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.scout_name}{s.scout_type ? ` (${s.scout_type})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {/* Lifecycle / status */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Estado op.</label>
+              <select value={driverLifecycleFilter} onChange={e => setDriverLifecycleFilter(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-[11px]">
+                {DRIVER_LIFECYCLE_OPTIONS.map(o => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            {/* Min trips 7d */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Min trips 7D</label>
+              <input type="number" value={filterMinTrips7d || ''} onChange={e => setFilterMinTrips7d(Number(e.target.value) || 0)}
+                placeholder="0" min={0}
+                className="w-full border rounded px-2 py-1 text-[11px]" />
+            </div>
+            {/* Sort */}
+            <div>
+              <label className="block text-[10px] text-gray-400 uppercase mb-0.5">Orden</label>
+              <div className="flex gap-1">
+                <select value={sortField} onChange={e => setSortField(e.target.value)}
+                  className="flex-1 border rounded px-2 py-1 text-[11px]">
+                  <option value="anchor_date">Fecha ancla</option>
+                  <option value="hire_date">Hire date</option>
+                  <option value="scout">Scout</option>
+                  <option value="driver_name">Driver</option>
+                  <option value="anchor_confidence">Confianza</option>
+                </select>
+                <button onClick={() => setSortDir(s => s === 'desc' ? 'asc' : 'desc')}
+                  className="px-2 py-1 border rounded text-[11px] bg-gray-50 hover:bg-gray-100 font-mono"
+                  title={sortDir === 'desc' ? 'Descendente' : 'Ascendente'}>
+                  {sortDir === 'desc' ? '↓' : '↑'}
                 </button>
-                {isExpanded && canExpand && (
-                  <div className={`ml-9 mt-1.5 mb-2 ${pad} bg-gray-50/70 rounded-lg border border-gray-100`}>
-                    {renderStepContent(step.id)}
-                  </div>
-                )}
               </div>
-            )
-          })}
+            </div>
+            {/* Reset */}
+            <div className="flex items-end">
+              <button onClick={() => {
+                setDriverSearch(''); setDriverOriginFilter(''); setDriverLifecycleFilter('')
+                setFilterAnchorSource(''); setFilterAnchorConfidence(''); setFilterHasWarning('')
+                setFilterPaymentStatus(''); setFilterBlockReason(''); setFilterScoutId('')
+                setFilterMinTrips7d(0); setSortField('anchor_date'); setSortDir('desc')
+              }} className="px-2 py-1 text-[10px] text-red-500 hover:text-red-700 border border-red-200 rounded">
+                Limpiar filtros
+              </button>
+            </div>
+          </div>
+          {/* Freshness */}
+          {driversFreshness && (
+            <div className="mt-2 pt-2 border-t border-gray-100 flex items-center gap-2 text-[10px]">
+              <span className="text-gray-400">Fuente:</span>
+              <span className={`px-1.5 py-0.5 rounded ${
+                driversFreshness.freshness_status === 'ok' ? 'bg-green-50 text-green-600' :
+                driversFreshness.freshness_status === 'warning' ? 'bg-yellow-50 text-yellow-600' : 'bg-red-50 text-red-600'
+              }`}>
+                {driversFreshness.freshness_status?.toUpperCase()} · max hire: {driversFreshness.source_max_hire_date || '—'} · lag: {driversFreshness.data_lag_days}d
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* DRIVER TABLE — wide operational view */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-2 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px] whitespace-nowrap">
+            <thead>
+              <tr className="text-left text-[10px] text-gray-400 uppercase bg-gray-50/80 border-b border-gray-200 sticky top-0 z-10">
+                {visibleCols.has('driver') && (
+                  <>
+                    <th className="px-2 py-1.5 font-medium sticky left-0 bg-gray-50/80 z-10">Driver</th>
+                    <th className="px-2 py-1.5 font-medium w-16">Origen</th>
+                  </>
+                )}
+                {visibleCols.has('anchor') && (
+                  <>
+                    <th className="px-2 py-1.5 font-medium bg-amber-50/60" title="Fecha usada para ordenar y evaluar la afiliacion. Sale de lead_created_at_fleet, lead_created_at_cabinet o hire_date fallback segun origen y disponibilidad.">Fecha ancla</th>
+                    <th className="px-2 py-1.5 font-medium bg-amber-50/60">Fuente</th>
+                    <th className="px-2 py-1.5 font-medium bg-amber-50/60">Conf.</th>
+                    <th className="px-2 py-1.5 font-medium bg-amber-50/60 w-10">Gap</th>
+                    <th className="px-2 py-1.5 font-medium bg-amber-50/60">Hire date</th>
+                    <th className="px-2 py-1.5 font-medium bg-amber-50/60">Ancla tipo</th>
+                    <th className="px-2 py-1.5 font-medium">Hire ref</th>
+                    <th className="px-2 py-1.5 font-medium">Date basis</th>
+                    <th className="px-2 py-1.5 font-medium">Lead cab.</th>
+                    <th className="px-2 py-1.5 font-medium">Lead fl.</th>
+                  </>
+                )}
+                {visibleCols.has('attribution') && (
+                  <>
+                    <th className="px-2 py-1.5 font-medium">Scout</th>
+                    <th className="px-2 py-1.5 font-medium w-16">Asig.</th>
+                  </>
+                )}
+                {visibleCols.has('progress') && (
+                  <>
+                    <th className="px-2 py-1.5 font-medium w-10">Act.</th>
+                    <th className="px-2 py-1.5 font-medium w-10">7D</th>
+                    <th className="px-2 py-1.5 font-medium w-10">14D</th>
+                    <th className="px-2 py-1.5 font-medium w-10">5V7</th>
+                    <th className="px-2 py-1.5 font-medium w-10">5V14</th>
+                  </>
+                )}
+                {visibleCols.has('payment') && (
+                  <>
+                    <th className="px-2 py-1.5 font-medium">Pago</th>
+                    <th className="px-2 py-1.5 font-medium">Monto</th>
+                  </>
+                )}
+                {visibleCols.has('risk') && (
+                  <>
+                    <th className="px-2 py-1.5 font-medium">Bloqueo</th>
+                    <th className="px-2 py-1.5 font-medium">Warning</th>
+                    <th className="px-2 py-1.5 font-medium w-10">Rev.</th>
+                  </>
+                )}
+                <th className="px-2 py-1.5 font-medium w-12">Accion</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {driversLoading && drivers.length === 0 ? (
+                Array.from({ length: 8 }).map((_, i) => (
+                  <tr key={i}>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-24" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-10" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-16" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-16" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-12" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-12" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-15" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-15" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-12" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-10" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-10" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-14" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-10" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-16" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-16" /></td>
+                    <td className="px-2 py-2"><div className="bg-gray-200 rounded animate-pulse h-3 w-10" /></td>
+                    <td className="px-2 py-2" />
+                  </tr>
+                ))
+              ) : filteredDrivers.length === 0 ? (
+                <tr><td colSpan={20} className="px-2 py-8 text-center text-gray-400">No se encontraron conductores con los filtros actuales.</td></tr>
+              ) : (
+                filteredDrivers.map((d, idx) => {
+                  const lifecycle = deriveDriverLifecycle(d)
+                  const borderClass = DRIVER_LIFECYCLE_BORDER[lifecycle] || ''
+                  const payStatus = d.payment_status || 'no_payable'
+                  const anchorSource = d.anchor_source || 'unknown'
+                  const anchorConf = d.anchor_confidence || 'unknown'
+                  const hasWarning = !!(d.payment_trace_warning || d.reason === 'manual_review')
+                  const isManualReview = d.reason === 'manual_review' || d.payment_trace_status === 'blocked_manual_exclude'
+                  return (
+                    <tr key={d.driver_id || idx}
+                      onClick={() => setSelectedDriver(d)}
+                      className={`${borderClass} hover:bg-blue-50/30 cursor-pointer transition-colors`}>
+                      {/* Driver group */}
+                      {visibleCols.has('driver') && (
+                        <>
+                          <td className="px-2 py-1.5 sticky left-0 bg-white z-5">
+                            <div className="font-semibold text-gray-800 truncate max-w-[140px]">{d.driver_name || d.driver_id}</div>
+                            <div className="text-[9px] text-gray-400 font-mono">{d.driver_id ? d.driver_id.substring(0, 14) : 'SIN ID'}</div>
+                            {d.license && <div className="text-[9px] text-gray-300 font-mono">Lic: {d.license.substring(0, 10)}</div>}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <span className={`px-1 py-0.5 rounded text-[9px] font-medium ${
+                              d.origin === 'cabinet' ? 'bg-blue-50 text-blue-600' : d.origin === 'fleet' ? 'bg-purple-50 text-purple-600' : 'bg-gray-100 text-gray-500'
+                            }`}>{d.origin || '—'}</span>
+                          </td>
+                        </>
+                      )}
+                      {/* Anchor date group */}
+                      {visibleCols.has('anchor') && (
+                        <>
+                          <td className="px-2 py-1.5 bg-amber-50/20 font-mono text-gray-800">
+                            {d.anchor_date ? d.anchor_date.substring(0, 10) : (d.hire_date || '—')}
+                          </td>
+                          <td className="px-2 py-1.5 bg-amber-50/20">
+                            <span className={`px-1 py-0.5 rounded text-[9px] font-medium ${
+                              anchorSource === 'lead_cabinet' ? 'bg-blue-50 text-blue-600' :
+                              anchorSource === 'lead_fleet' ? 'bg-purple-50 text-purple-600' :
+                              anchorSource === 'hire_date' ? 'bg-amber-50 text-amber-600' : 'bg-gray-100 text-gray-400'
+                            }`}>{ANCHOR_SOURCE_LABEL[anchorSource] || anchorSource}</span>
+                          </td>
+                          <td className="px-2 py-1.5 bg-amber-50/20">
+                            <span className={`px-1 py-0.5 rounded text-[9px] font-medium ${ANCHOR_CONFIDENCE_COLOR[anchorConf] || 'bg-gray-100 text-gray-400'}`}>
+                              {anchorConf === 'strong' ? 'Fuerte' : anchorConf === 'medium' ? 'Medio' : anchorConf === 'weak' ? 'Debil' : '—'}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 bg-amber-50/20 text-center text-gray-500">
+                            {d.anchor_gap_days != null ? `${d.anchor_gap_days}d` : '—'}
+                          </td>
+                          <td className="px-2 py-1.5 bg-amber-50/20 text-gray-600 font-mono">{d.hire_date ? d.hire_date.substring(0, 10) : '—'}</td>
+                          <td className="px-2 py-1.5 bg-amber-50/20 text-[9px] text-gray-500">{d.anchor_type || '—'}</td>
+                          <td className="px-2 py-1.5 font-mono text-gray-500 text-[9px]">{d.hire_date_reference ? d.hire_date_reference.substring(0, 10) : '—'}</td>
+                          <td className="px-2 py-1.5 font-mono text-gray-400 text-[9px]">{d.date_basis || '—'}</td>
+                          <td className="px-2 py-1.5 font-mono text-gray-500">{d.lead_created_at_cabinet ? d.lead_created_at_cabinet.substring(0, 10) : '—'}</td>
+                          <td className="px-2 py-1.5 font-mono text-gray-500">{d.lead_created_at_fleet ? d.lead_created_at_fleet.substring(0, 10) : '—'}</td>
+                        </>
+                      )}
+                      {/* Attribution */}
+                      {visibleCols.has('attribution') && (
+                        <>
+                          <td className="px-2 py-1.5">
+                            <span className={d.scout_name ? 'text-gray-700 font-medium' : 'text-gray-400 italic text-[9px]'}>
+                              {d.scout_name || 'Sin scout'}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <span className={`px-1 py-0.5 rounded text-[9px] font-medium ${
+                              d.attribution_status === 'assigned' ? 'bg-green-50 text-green-600' : 'bg-yellow-50 text-yellow-600'
+                            }`}>{d.attribution_status === 'assigned' ? 'OK' : 'NO'}</span>
+                          </td>
+                        </>
+                      )}
+                      {/* Progress */}
+                      {visibleCols.has('progress') && (
+                        <>
+                          <td className="px-2 py-1.5 text-center">
+                            <span className={d.activated_flag ? 'text-green-600 font-bold' : 'text-gray-300'}>{d.activated_flag ? 'Si' : '—'}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center font-mono">
+                            <span className={d.trips_7d >= 5 ? 'text-blue-600 font-bold' : 'text-gray-500'}>{d.trips_7d}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center font-mono">
+                            <span className={d.trips_14d >= 5 ? 'text-purple-600 font-bold' : 'text-gray-500'}>{d.trips_14d}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <span className={d.converted_5v7d ? 'text-blue-600 font-bold' : 'text-gray-300'}>{d.converted_5v7d ? 'Si' : '—'}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <span className={d.converted_5v14d ? 'text-purple-600 font-bold' : 'text-gray-300'}>{d.converted_5v14d ? 'Si' : '—'}</span>
+                          </td>
+                        </>
+                      )}
+                      {/* Payment */}
+                      {visibleCols.has('payment') && (
+                        <>
+                          <td className="px-2 py-1.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${
+                              payStatus === 'payable' ? 'bg-emerald-100 text-emerald-700' :
+                              payStatus === 'paid' ? 'bg-teal-100 text-teal-700' :
+                              'bg-gray-100 text-gray-500'
+                            }`}>
+                              {payStatus === 'payable' ? 'PAGABLE' : payStatus === 'paid' ? 'PAGADO' : 'NO PAGABLE'}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 font-mono text-gray-700 text-right">
+                            {d.amount ? `S/ ${d.amount.toFixed(0)}` : '—'}
+                          </td>
+                        </>
+                      )}
+                      {/* Risk */}
+                      {visibleCols.has('risk') && (
+                        <>
+                          <td className="px-2 py-1.5 text-[9px] text-gray-500">
+                            {d.reason === 'no_scout' ? 'Sin scout' :
+                             d.reason === 'no_activation' ? 'Sin activ.' :
+                             d.reason === 'already_paid' ? 'Ya pagado' :
+                             d.reason === 'min_activated_not_reached' ? 'Min activ.' :
+                             d.reason === 'tier_not_reached' ? 'No tier' :
+                             d.reason === 'manual_review' ? 'Rev manual' :
+                             d.reason === 'manual_exclude' ? 'Excluido' : d.reason || '—'}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            {hasWarning && <span className="px-1 py-0.5 rounded text-[9px] bg-orange-100 text-orange-600 font-medium">WARN</span>}
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            {isManualReview && <span className="px-1 py-0.5 rounded text-[9px] bg-red-100 text-red-600 font-medium">REV</span>}
+                          </td>
+                        </>
+                      )}
+                      <td className="px-2 py-1.5 text-right">
+                        <span className="text-gray-300 text-base leading-none cursor-pointer">&rsaquo;</span>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        <div className="px-3 py-1.5 border-t border-gray-100 flex items-center justify-between text-[10px] text-gray-400 flex-wrap gap-1">
+          <div className="flex items-center gap-2">
+            <span>Mostrando <strong className="text-gray-600">{drivers.length > 0 ? driverPage * driversPageSize + 1 : 0}</strong>-<strong className="text-gray-600">{Math.min((driverPage + 1) * driversPageSize, driversTotal)}</strong> de <strong className="text-gray-600">{driversTotal}</strong></span>
+            <span className="text-gray-300">|</span>
+            <span className="text-gray-300">{filteredDrivers.length} filtrados</span>
+            {!driversHasNext && drivers.length > 0 && <span className="text-gray-300 ml-1">· fin</span>}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <select value={driversPageSize} onChange={e => {
+              const newSize = Number(e.target.value)
+              setDriversPageSize(newSize)
+              setDriverPage(0)
+              loadDrivers(0, false, newSize)
+            }}
+              className="border rounded px-1.5 py-0.5 text-[10px]">
+              <option value="50">50/pag</option>
+              <option value="100">100/pag</option>
+              <option value="200">200/pag</option>
+            </select>
+            <button onClick={() => { const p = Math.max(0, driverPage - 1); setDriverPage(p); loadDrivers(p, false) }}
+              disabled={driverPage === 0 || driversLoading}
+              className="px-2 py-0.5 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-30">Anterior</button>
+            <span className="px-1 font-mono text-gray-500">Pag {driverPage + 1}</span>
+            <button onClick={() => { const p = driverPage + 1; setDriverPage(p); loadDrivers(p, false) }}
+              disabled={!driversHasNext || driversLoading}
+              className="px-2 py-0.5 rounded border border-gray-200 hover:bg-gray-50 disabled:opacity-30">Siguiente</button>
+          </div>
+        </div>
+        {/* Filter scope note */}
+        <div className="px-3 py-1 bg-amber-50/40 border-t border-amber-100 text-[9px] text-amber-700">
+          Filtros server-side: origen, scout, busqueda de texto. Los demas filtros (confianza, warning, pago, bloqueo, estado op., trips) se aplican sobre los datos ya cargados en esta pagina.
         </div>
       </div>
 
-      {/* ── ANALYTICS (P7: at bottom, collapsible) ── */}
+      {/* ── WORKFLOW / SECONDARY TOOLS (collapsible) ── */}
+      <div className="mb-4">
+        <button onClick={() => setShowWorkflow(!showWorkflow)}
+          className="text-xs font-medium text-gray-400 hover:text-gray-600 flex items-center gap-1"
+        >
+          {showWorkflow ? '▲' : '▼'} Workflow operativo y herramientas
+        </button>
+        {showWorkflow && (
+          <div className="mt-3 space-y-4">
+            {/* ── ATTENTION CARDS ── */}
+            {(quickFilter === 'all' || quickFilter === 'blocked') && attentionCards.filter(c => c.level === 'critical').map(card => (
+              <AttentionCard key={card.id} card={card} />
+            ))}
+            {(quickFilter === 'all' || quickFilter === 'warnings') && attentionCards.filter(c => c.level === 'warning').map(card => (
+              <AttentionCard key={card.id} card={card} />
+            ))}
+            {(quickFilter === 'all' || quickFilter === 'pending' || quickFilter === 'trusted') && attentionCards.filter(c => c.level === 'operational').map(card => (
+              <AttentionCard key={card.id} card={card} />
+            ))}
+
+            {/* ── WORKFLOW STEPPER ── */}
+            <div ref={stepperRef} className={`bg-white border border-gray-200 rounded-xl shadow-sm ${pad}`}>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Workflow operativo</h3>
+              <div className={`flex flex-col ${gap}`}>
+                {steps.map((step, idx) => {
+                  const isExpanded = expandedSteps.has(step.id)
+                  const colorSet = step.status === 'completed' ? GREEN : step.status === 'blocked' ? RED : step.status === 'in_progress' ? BLUE : step.status === 'ready' ? YELLOW : GRAY
+                  const canExpand = step.enabled || step.status === 'completed'
+                  return (
+                    <div key={step.id}>
+                      <button onClick={() => canExpand && toggleStep(step.id)}
+                        disabled={!canExpand}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg border text-left transition-all ${!canExpand ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer hover:shadow-sm'} ${colorSet.border} ${colorSet.bg}`}
+                      >
+                        <span className="text-base w-6 text-center font-bold flex-shrink-0">{STATUS_ICON[step.status]}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-xs">{idx + 1}. {step.label}</span>
+                            {step.pendingCount > 0 && <Badge label={`${step.pendingCount}`} color={colorSet.badge} />}
+                          </div>
+                          {density === 'comfortable' && <p className="text-[11px] mt-0.5 opacity-70">{step.subtext || step.description}</p>}
+                        </div>
+                        <span className="text-[10px] font-medium flex-shrink-0 hidden sm:inline opacity-60">{step.ctaLabel}</span>
+                        <span className="text-xs flex-shrink-0">{canExpand ? (isExpanded ? '▲' : '▼') : '·'}</span>
+                      </button>
+                      {isExpanded && canExpand && (
+                        <div className={`ml-9 mt-1.5 mb-2 ${pad} bg-gray-50/70 rounded-lg border border-gray-100`}>
+                          {renderStepContent(step.id)}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── ANALYTICS ── */}
       {dashboardAlerts && (
         <div className="mb-4">
           <button onClick={() => setShowAnalytics(!showAnalytics)}
@@ -547,6 +1226,30 @@ export default function CentroOperativoView() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── HERRAMIENTAS DE DIAGNOSTICO ── */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 mb-4">
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Herramientas de diagnostico</h3>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+          <a href="/scout-liq/anchor" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-gray-100 hover:bg-gray-50 text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors">
+            <span className="w-5 h-5 rounded bg-amber-100 text-amber-600 flex items-center justify-center text-[10px] font-bold">A</span>
+            Diagnostico de fechas / Anchor
+          </a>
+          <a href="/scout-liq/review-queue" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-gray-100 hover:bg-gray-50 text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors">
+            <span className="w-5 h-5 rounded bg-purple-100 text-purple-600 flex items-center justify-center text-[10px] font-bold">R</span>
+            Cola de revision
+          </a>
+          <a href="/scout-liq/salud" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-gray-100 hover:bg-gray-50 text-xs font-medium text-gray-600 hover:text-gray-800 transition-colors">
+            <span className="w-5 h-5 rounded bg-emerald-100 text-emerald-600 flex items-center justify-center text-[10px] font-bold">S</span>
+            Salud de data
+          </a>
+        </div>
+      </div>
+
+      {/* ── DRIVER DETAIL DRAWER ── */}
+      {selectedDriver && (
+        <DriverDetailDrawer driver={selectedDriver} onClose={() => setSelectedDriver(null)} onDriverUpdated={() => { setSelectedDriver(null); loadDrivers(driverPage, false) }} />
       )}
     </div>
   )
@@ -844,7 +1547,6 @@ export default function CentroOperativoView() {
         <div className="flex flex-wrap gap-2">
           {canPay && <button onClick={handleMarkPaid} disabled={paying} className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-semibold disabled:opacity-50">{paying ? 'Procesando...' : 'Marcar pagado'}</button>}
           <button onClick={() => openExport(getPaymentExportCsvUrl)} className="px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">CSV</button>
-          <button onClick={() => openExport(getPaymentExportXlsxUrl)} className="px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">XLSX</button>
           <button onClick={() => openExport(getCutoffExportFinancialUrl)} className="px-3 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">Financiero</button>
         </div>
       </div>

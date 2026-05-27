@@ -291,6 +291,8 @@ export interface CreateCutoffParams {
   scout_type_filter?: string
 }
 
+// Legacy only — uses ConversionScheme, no rule_type snapshot.
+// Prefer createCutoffFromCohort() or createSweepCutoff() for versioned PaymentSchemeVersion snapshots.
 export async function createCutoff(params: CreateCutoffParams): Promise<any> {
   const { data } = await api.post('/cutoffs', null, { params })
   return data
@@ -615,6 +617,16 @@ export interface CanonicalDriver {
   payment_formula_label: string | null
   source_driver_status: string | null
   source_updated_at: string | null
+  lead_created_at_cabinet: string | null
+  lead_created_at_fleet: string | null
+  anchor_date: string | null
+  anchor_source: string | null
+  anchor_confidence: string | null
+  anchor_gap_days: number | null
+  anchor_type: string | null
+  anchor_warning: string | null
+  hire_date_reference: string | null
+  date_basis: string | null
 }
 
 export interface CanonicalFreshness {
@@ -632,6 +644,7 @@ export interface CanonicalSnapshotResponse {
   total: number
   limit: number
   offset: number
+  has_next: boolean
   items: CanonicalDriver[]
   freshness: CanonicalFreshness
 }
@@ -675,6 +688,7 @@ export async function getCanonicalOperation(params?: {
   scout_id?: number
   attribution_status?: string
   payment_status?: string
+  search?: string
   limit?: number
   offset?: number
 }): Promise<CanonicalSnapshotResponse> {
@@ -2053,5 +2067,22 @@ export async function performAnchorReview(
   body: { action: string; actor?: string; reason?: string; notes?: string; reviewed_anchor_date?: string }
 ): Promise<any> {
   const { data } = await api.post(`/anchor-review/${lineId}/action`, body)
+  return data
+}
+
+export async function simulatePayment(params: {
+  hire_date_from: string
+  hire_date_to: string
+  scheme_id: number
+  origin?: string
+  scout_type?: string
+  override_tiers?: { min_conversion_rate: number; payout_amount: number }[]
+  override_min_affiliations?: number
+  override_quality_rule?: string
+  override_pays_on_rule?: string
+  override_payout_formula_type?: string
+  override_activation_rule?: string
+}): Promise<any> {
+  const { data } = await api.post('/payments/simulate', params)
   return data
 }

@@ -196,6 +196,8 @@ def create_payment_scheme_version(
     maturity_window_days: Optional[int] = None,
     fixed_payout_amount: Optional[float] = None,
     minimum_enabled: bool = True,
+    block_scope: Optional[str] = None,
+    cohort_target_count: Optional[int] = None,
 ) -> Dict[str, Any]:
     scheme = db.query(PaymentScheme).filter(PaymentScheme.id == scheme_id).first()
     if not scheme:
@@ -241,6 +243,8 @@ def create_payment_scheme_version(
         maturity_window_days=maturity_window_days or maturity_days,
         fixed_payout_amount=Decimal(str(fixed_payout_amount)) if fixed_payout_amount else None,
         minimum_enabled=minimum_enabled,
+        block_scope=block_scope or "driver_global",
+        cohort_target_count=cohort_target_count,
         status="draft",
     )
     db.add(version)

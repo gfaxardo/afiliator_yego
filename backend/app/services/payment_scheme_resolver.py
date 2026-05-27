@@ -122,6 +122,8 @@ def resolve_payment_scheme_for_cohort(
         "currency": version.currency,
         "fixed_payout_amount": float(version.fixed_payout_amount) if version.fixed_payout_amount else None,
         "minimum_enabled": bool(version.minimum_enabled),
+        "block_scope": version.block_scope or "driver_global",
+        "cohort_target_count": version.cohort_target_count or 0,
         "tiers": [
             {
                 "min_conversion_rate": float(t.min_conversion_rate),

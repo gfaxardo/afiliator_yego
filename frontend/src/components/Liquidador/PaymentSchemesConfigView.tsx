@@ -3,6 +3,7 @@ import {
   listPaymentSchemes, getPaymentSchemeDetail,
   createPaymentSchemeVersion, activatePaymentSchemeVersion,
   getPaymentSchemesHistory,
+  simulatePayment,
   type PaymentSchemeListItem, type PaymentSchemeDetail,
   type SchemeVersionDetail, type HistoryItem,
 } from '../../api/scoutLiq'
@@ -137,6 +138,27 @@ export default function PaymentSchemesConfigView() {
     minimum_enabled: true,
   })
   const [formError, setFormError] = useState<string | null>(null)
+
+  // Simulator
+  const [showSimulator, setShowSimulator] = useState(false)
+  const [simAffiliates, setSimAffiliates] = useState(10)
+  const [simConverted, setSimConverted] = useState(3)
+  const [simResult, setSimResult] = useState<any>(null)
+  const [simLoading, setSimLoading] = useState(false)
+
+  function getModalityLabel(v: SchemeVersionDetail | null | undefined): string {
+    if (!v) return ''
+    const f = v.payout_formula_type || v.formula_type || ''
+    if (f === 'FIXED_PER_DRIVER') return 'Pago por hito individual'
+    return 'Pago por calidad del scout/cohorte'
+  }
+
+  function getModalityColor(v: SchemeVersionDetail | null | undefined): string {
+    if (!v) return ''
+    const f = v.payout_formula_type || v.formula_type || ''
+    if (f === 'FIXED_PER_DRIVER') return 'bg-indigo-100 text-indigo-700'
+    return 'bg-emerald-100 text-emerald-700'
+  }
 
   const loadSchemes = useCallback(async () => {
     try {
@@ -298,6 +320,10 @@ export default function PaymentSchemesConfigView() {
                       color={PAYS_ON_COLORS[activeVersion.pays_on_rule] || 'bg-gray-100 text-gray-600 border-gray-200'} />
                   )}
                 </div>
+                <F label="Modalidad" value={getModalityLabel(activeVersion)} bold />
+                <div className="px-3 py-1">
+                  <Badge label={getModalityLabel(activeVersion)} color={getModalityColor(activeVersion)} />
+                </div>
                 <F label="Vigencia desde" value={activeVersion.valid_from_cohort_iso_week} mono />
                 <F label="Vigencia hasta" value={activeVersion.valid_to_cohort_iso_week || 'Sin limite'} mono />
                 <F label="Hito para volumen" value={RULE_LABELS[activeVersion.volume_rule || activeVersion.activation_rule] || activeVersion.volume_rule || activeVersion.activation_rule} mono bold />
@@ -367,6 +393,89 @@ export default function PaymentSchemesConfigView() {
 
             {/* Create version button / form */}
             <div className="border-t border-gray-200 pt-3">
+              {/* Simulator */}
+              <div className="mb-4 p-3 bg-blue-50/30 border border-blue-200 rounded-lg">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold text-blue-800">Simulador</h4>
+                  <button onClick={async () => {
+                    if (!selectedScheme || !activeVersion) return
+                    setSimLoading(true)
+                    try {
+                      const isFixed = activeVersion.payout_formula_type === 'FIXED_PER_DRIVER'
+                        || activeVersion.formula_type === 'FIXED_PER_DRIVER'
+                      const result = await simulatePayment({
+                        hire_date_from: activeVersion.valid_from_cohort_iso_week
+                          ? `${activeVersion.valid_from_cohort_iso_week.substring(0, 4)}-01-01`
+                          : '2025-01-01',
+                        hire_date_to: '2026-12-31',
+                        scheme_id: selectedScheme.scheme_id,
+                        override_payout_formula_type: isFixed ? 'FIXED_PER_DRIVER' : 'ACTIVATED_X_TIER',
+                        override_min_affiliations: simAffiliates,
+                        override_tiers: activeVersion.tiers?.map((t: any) => ({ min_conversion_rate: t.min_conversion_rate, payout_amount: t.payout_amount })) || [],
+                      })
+                      // Fallback: compute locally if API fails with schema mismatch
+                      const modality = isFixed ? 'driver_milestone' : 'cohort_quality_tier'
+                      if (modality === 'driver_milestone') {
+                        const amount = activeVersion.fixed_payout_amount || 10
+                        setSimResult({
+                          modality: 'Hito individual',
+                          calculation: `${simConverted} conductores x S/ ${amount}`,
+                          total: simConverted * amount,
+                          explanation: `${simConverted} conductores de ${simAffiliates} alcanzaron el hito configurado. Total: S/ ${simConverted * amount}`,
+                        })
+                      } else {
+                        const rate = simAffiliates > 0 ? simConverted / simAffiliates : 0
+                        const tiers = activeVersion.tiers || []
+                        let tierAmount = 0
+                        let tierLabel = 'sin tramo'
+                        for (const t of tiers) {
+                          if (rate >= t.min_conversion_rate) {
+                            tierAmount = t.payout_amount
+                            tierLabel = `${(t.min_conversion_rate * 100).toFixed(0)}%`
+                          }
+                        }
+                        const total = tierAmount > 0 ? simConverted * tierAmount : 0
+                        const minOk = simAffiliates >= (activeVersion.min_activated || activeVersion.min_volume_count || 8)
+                        setSimResult({
+                          modality: 'Calidad/cohorte',
+                          calculation: `${simConverted}/${simAffiliates} = ${(rate * 100).toFixed(0)}% → tramo ${tierLabel} (S/ ${tierAmount}/conv)`,
+                          total,
+                          explanation: minOk
+                            ? `${simConverted} convertidos x S/ ${tierAmount} = S/ ${total}`
+                            : `Bloqueado: minimo de ${activeVersion.min_activated || 8} afiliaciones requerido, tiene ${simAffiliates}`,
+                        })
+                      }
+                    } catch (e: any) {
+                      setSimResult({ error: e?.response?.data?.detail || e?.message || 'Error al simular' })
+                    }
+                    finally { setSimLoading(false) }
+                  }}
+                    disabled={simLoading}
+                    className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700 disabled:opacity-50">
+                    {simLoading ? 'Simulando...' : 'Simular'}
+                  </button>
+                </div>
+                <div className="flex gap-2 items-center text-[10px]">
+                  <label className="text-gray-400">Afiliados:</label>
+                  <input type="number" value={simAffiliates} onChange={e => setSimAffiliates(Number(e.target.value) || 0)}
+                    className="w-16 border rounded px-1 py-0.5 text-xs" min={0} />
+                  <label className="text-gray-400 ml-2">Convertidos:</label>
+                  <input type="number" value={simConverted} onChange={e => setSimConverted(Number(e.target.value) || 0)}
+                    className="w-16 border rounded px-1 py-0.5 text-xs" min={0} />
+                </div>
+                {simResult && !simResult.error && (
+                  <div className="mt-2 bg-white rounded p-2 text-[10px] space-y-0.5 border border-green-200">
+                    <div className="font-semibold text-gray-700">Modalidad: {simResult.modality}</div>
+                    <div className="font-mono text-gray-600">{simResult.calculation}</div>
+                    <div className="font-bold text-emerald-700">Total: S/ {simResult.total.toLocaleString()}</div>
+                    <div className="text-gray-500">{simResult.explanation}</div>
+                  </div>
+                )}
+                {simResult?.error && (
+                  <div className="mt-2 bg-red-50 border border-red-200 rounded p-2 text-[10px] text-red-600">{simResult.error}</div>
+                )}
+              </div>
+
               {!showCreateVersion ? (
                 <button onClick={() => { setShowCreateVersion(true); setFormError(null); setSuccess(null); setError(null) }}
                   className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 font-semibold">

@@ -545,6 +545,16 @@ class CanonicalDriverItem(BaseModel):
     payment_formula_label: Optional[str] = ""
     source_driver_status: Optional[str] = None
     source_updated_at: Optional[str] = None
+    lead_created_at_cabinet: Optional[str] = None
+    lead_created_at_fleet: Optional[str] = None
+    anchor_date: Optional[str] = None
+    anchor_source: Optional[str] = None
+    anchor_confidence: Optional[str] = None
+    anchor_gap_days: Optional[int] = None
+    anchor_type: Optional[str] = None
+    anchor_warning: Optional[str] = None
+    hire_date_reference: Optional[str] = None
+    date_basis: Optional[str] = None
 
 
 class CanonicalFreshness(BaseModel):
@@ -562,6 +572,7 @@ class CanonicalOperationSnapshotResponse(BaseModel):
     total: int = 0
     limit: int = 100
     offset: int = 0
+    has_next: bool = False
     items: List[CanonicalDriverItem] = []
     freshness: CanonicalFreshness = CanonicalFreshness()
 
@@ -703,6 +714,8 @@ class CreateVersionRequest(BaseModel):
     tiers: List[TierInput]
     fixed_payout_amount: Optional[float] = None
     minimum_enabled: bool = True
+    block_scope: Optional[str] = None
+    cohort_target_count: Optional[int] = None
 
 
 class VersionCreatedResponse(BaseModel):

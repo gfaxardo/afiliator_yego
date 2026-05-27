@@ -22,6 +22,7 @@ import ReconciliationView from './components/Liquidador/ReconciliationView'
 import UnifiedLoadView from './components/Liquidador/UnifiedLoadView'
 import CentroCargaView from './components/Liquidador/CentroCargaView'
 import CentroOperativoView from './components/Liquidador/CentroOperativoView'
+import LiquidacionesView from './components/Liquidador/LiquidacionesView'
 import HealthDashboardView from './components/Liquidador/HealthDashboardView'
 import AcquisitionAnchorView from './components/Liquidador/AcquisitionAnchorView'
 import AnchorReviewQueueView from './components/Liquidador/AnchorReviewQueueView'
@@ -52,6 +53,9 @@ function App() {
           <Route path="centro-carga" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
           <Route path="unified-load" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
           <Route path="reconciliation" element={<Navigate to="/scout-liq/centro-operativo" replace />} />
+
+          {/* ── Liquidaciones: pantalla principal de flujo de pago ── */}
+          <Route path="liquidaciones" element={<LiquidacionesView />} />
 
           {/* ── Vistas de detalle / solo lectura (sin CTA de flujo) ── */}
           <Route path="operation" element={<OperationView />} />

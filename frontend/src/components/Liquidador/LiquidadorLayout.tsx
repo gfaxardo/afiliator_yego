@@ -2,14 +2,8 @@ import { useState, useMemo } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 
 const MAIN_TABS = [
-  { to: '/scout-liq/ejecutivo', label: 'Ejecutivo' },
   { to: '/scout-liq/centro-operativo', label: 'Centro Operativo' },
-  { to: '/scout-liq/operation', label: 'Operacion' },
-  { to: '/scout-liq/configuracion', label: 'Configuracion' },
-  { to: '/scout-liq/dashboard', label: 'Dashboard' },
-  { to: '/scout-liq/anchor', label: 'Anchor' },
-  { to: '/scout-liq/review-queue', label: 'Review' },
-  { to: '/scout-liq/salud', label: 'Salud' },
+  { to: '/scout-liq/liquidaciones', label: 'Liquidaciones' },
 ]
 
 const LEGACY_UPLOAD_TABS = [
@@ -26,11 +20,17 @@ const LEGACY_UPLOAD_TABS = [
 ]
 
 const ALWAYS_ADVANCED_TABS = [
+  { to: '/scout-liq/configuracion', label: 'Reglas de Pago' },
+  { to: '/scout-liq/ejecutivo', label: 'Ejecutivo' },
+  { to: '/scout-liq/dashboard', label: 'Dashboard' },
+  { to: '/scout-liq/anchor', label: 'Anchor / Fechas' },
+  { to: '/scout-liq/review-queue', label: 'Review Queue' },
+  { to: '/scout-liq/salud', label: 'Salud de Data' },
+  { to: '/scout-liq/operation', label: 'Operacion' },
   { to: '/scout-liq/supervisor-bonus', label: 'Sup & Bonos' },
   { to: '/scout-liq/paid-history', label: 'Historial Pagos' },
   { to: '/scout-liq/scouts', label: 'Scouts' },
   { to: '/scout-liq/config', label: 'Config' },
-  { to: '/scout-liq', label: 'Health' },
 ]
 
 const isLegacyEnabled = () =>
@@ -90,7 +90,6 @@ export default function LiquidadorLayout() {
                 <NavLink
                   key={tab.to}
                   to={tab.to}
-                  end={tab.to === '/scout-liq'}
                   onClick={() => setShowAdvanced(false)}
                   className={({ isActive }) =>
                     `block px-4 py-1.5 text-sm transition-colors ${

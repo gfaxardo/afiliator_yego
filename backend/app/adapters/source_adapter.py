@@ -285,61 +285,71 @@ def compute_trip_counts_batch(
     db: Session,
     driver_ids: List[str],
 ) -> Dict[str, Dict[str, int]]:
-    """Compute trips_0_7_count, trips_8_14_count and trips_0_30_count for a batch of drivers."""
+    """Compute trips_0_7_count, trips_8_14_count and trips_0_30_count for a batch of drivers.
+    
+    Uses anchor_date as window start (lead_created_at_cabinet/fleet -> hire_date -> created_at).
+    hire_date is only used as fallback when no anchor date exists.
+    """
     if not driver_ids:
         return {}
+    
     placeholders = ", ".join(f":did{i}" for i in range(len(driver_ids)))
     params = {f"did{i}": did for i, did in enumerate(driver_ids)}
-
+    
+    # anchor_date expression: lead_created_at > hire_date > created_at
+    anchor_expr = (
+        "COALESCE("
+        "CASE WHEN src.origen = 'cabinet' AND src.lead_created_at_cabinet LIKE '____-__-__%' "
+        "THEN src.lead_created_at_cabinet::timestamp::date "
+        "WHEN src.origen = 'fleet' AND src.lead_created_at_fleet LIKE '____-__-__%' "
+        "THEN src.lead_created_at_fleet::timestamp::date "
+        "ELSE NULL END, "
+        "src.hire_date::date, "
+        "src.created_at::date"
+        ")"
+    )
+    
     sql = f"""
-        SELECT s.driver_id,
-            COALESCE(SUM(t.trips_0_7), 0)::int AS trips_0_7_count,
-            COALESCE(SUM(t.trips_8_14), 0)::int AS trips_8_14_count,
-            COALESCE(SUM(t.trips_0_30), 0)::int AS trips_0_30_count
-        FROM module_ct_cabinet_drivers s
-        LEFT JOIN LATERAL (
-            SELECT
-                COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '7 days'
-                      AND condicion = 'Completado'
-                ) AS trips_0_7,
-                COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
-                      AND condicion = 'Completado'
-                ) AS trips_8_14,
-                COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
-                      AND condicion = 'Completado'
-                ) AS trips_0_30
-            FROM trips_2026
-            WHERE conductor_id = s.driver_id
+        WITH driver_ad AS (
+            SELECT src.driver_id,
+                   {anchor_expr} AS anchor_date,
+                   src.hire_date::date AS hire_date,
+                   src.origen AS origin
+            FROM module_ct_cabinet_drivers src
+            WHERE src.driver_id IN ({placeholders})
+              AND src.hire_date IS NOT NULL AND src.hire_date != ''
+        ),
+        trip_data AS (
+            SELECT t.conductor_id AS driver_id, d.anchor_date,
+                   t.fecha_inicio_viaje
+            FROM trips_2026 t
+            JOIN driver_ad d ON d.driver_id = t.conductor_id
+            WHERE t.condicion = 'Completado'
+              AND t.fecha_inicio_viaje >= d.anchor_date
+              AND t.fecha_inicio_viaje < d.anchor_date + INTERVAL '30 days'
             UNION ALL
-            SELECT
-                COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '7 days'
-                      AND condicion = 'Completado'
-                ) AS trips_0_7,
-                COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date + INTERVAL '7 days'
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '14 days'
-                      AND condicion = 'Completado'
-                ) AS trips_8_14,
-                COUNT(*) FILTER (
-                    WHERE fecha_inicio_viaje >= s.hire_date::date
-                      AND fecha_inicio_viaje < s.hire_date::date + INTERVAL '30 days'
-                      AND condicion = 'Completado'
-                ) AS trips_0_30
-            FROM trips_2025
-            WHERE conductor_id = s.driver_id
-              AND s.hire_date::date + INTERVAL '30 days' < '2026-01-01'::date
-        ) t ON true
-        WHERE s.driver_id IN ({placeholders})
-          AND s.hire_date IS NOT NULL AND s.hire_date != ''
-        GROUP BY s.driver_id
+            SELECT t.conductor_id AS driver_id, d.anchor_date,
+                   t.fecha_inicio_viaje
+            FROM trips_2025 t
+            JOIN driver_ad d ON d.driver_id = t.conductor_id
+            WHERE t.condicion = 'Completado'
+              AND d.anchor_date + INTERVAL '30 days' < '2026-01-01'::date
+              AND t.fecha_inicio_viaje >= d.anchor_date
+              AND t.fecha_inicio_viaje < d.anchor_date + INTERVAL '30 days'
+        )
+        SELECT driver_id,
+            COALESCE(COUNT(*) FILTER (WHERE fecha_inicio_viaje >= anchor_date
+                      AND fecha_inicio_viaje < anchor_date + INTERVAL '7 days'), 0)::int AS trips_0_7_count,
+            COALESCE(COUNT(*) FILTER (WHERE fecha_inicio_viaje >= anchor_date + INTERVAL '7 days'
+                      AND fecha_inicio_viaje < anchor_date + INTERVAL '14 days'), 0)::int AS trips_8_14_count,
+            COALESCE(COUNT(*) FILTER (WHERE fecha_inicio_viaje >= anchor_date
+                      AND fecha_inicio_viaje < anchor_date + INTERVAL '30 days'), 0)::int AS trips_0_30_count
+        FROM trip_data
+        GROUP BY driver_id
+        UNION ALL
+        SELECT driver_id, 0, 0, 0
+        FROM driver_ad
+        WHERE driver_id NOT IN (SELECT DISTINCT driver_id FROM trip_data)
     """
     rows = db.execute(text(sql), params).fetchall()
     return {r[0]: {"trips_0_7_count": r[1] or 0, "trips_8_14_count": r[2] or 0, "trips_0_30_count": r[3] or 0} for r in rows}
