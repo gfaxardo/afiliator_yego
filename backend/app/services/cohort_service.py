@@ -69,9 +69,10 @@ def _resolve_anchors_batch(db: Session, date_basis: str) -> List[Dict[str, Any]]
     from app.services.acquisition_anchor_service import (
         resolve_acquisition_anchor, _batch_load_drivers, _batch_match_leads,
     )
+    from app.services.lead_created_at_resolver import resolve_lead_created_at
 
     cols = ["driver_id", "driver_nombre", "driver_apellido", "driver_placa",
-            "hire_date", "lead_created_at", "created_at", "origen"]
+            "hire_date", "lead_created_at_cabinet", "lead_created_at_fleet", "created_at", "origen"]
     rows = db.execute(text(f"""
         SELECT {', '.join(cols)}
         FROM {SOURCE_TABLE}
@@ -82,8 +83,13 @@ def _resolve_anchors_batch(db: Session, date_basis: str) -> List[Dict[str, Any]]
 
     cabinet_without_lca = [
         {"driver_id": r[0], "driver_nombre": r[1], "driver_apellido": r[2],
-         "driver_placa": r[3], "origen": r[7]}
-        for r in rows if (r[7] or "").lower() == "cabinet" and not r[5]
+         "driver_placa": r[3], "origen": r[8],
+         "lead_created_at_cabinet": r[5], "lead_created_at_fleet": r[6]}
+        for r in rows
+        if (r[8] or "").lower() == "cabinet"
+        and not resolve_lead_created_at({
+            "origen": r[8], "lead_created_at_cabinet": r[5], "lead_created_at_fleet": r[6],
+        }).get("lead_created_at_resolved")
     ]
     leads_map = _batch_match_leads(db, cabinet_without_lca)
 

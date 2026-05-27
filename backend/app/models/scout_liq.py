@@ -809,3 +809,25 @@ class UxFeedback(Base):
     severity = Column(String(20), nullable=True)
     created_by = Column(String(100), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class OperationAudit(Base):
+    """Audit trail for operational line actions (approve, block, review, mark-paid)."""
+    __tablename__ = "scout_liq_operation_audit"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    line_id = Column(Integer, nullable=False, index=True)
+    cutoff_run_id = Column(Integer, nullable=True)
+    driver_id = Column(String(100), nullable=True)
+    action = Column(String(50), nullable=False)
+    actor = Column(String(100), nullable=True)
+    reason = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    previous_line_status = Column(String(50), nullable=True)
+    previous_payment_status = Column(String(50), nullable=True)
+    new_line_status = Column(String(50), nullable=True)
+    new_payment_status = Column(String(50), nullable=True)
+    override_reason = Column(Text, nullable=True)
+    before_state = Column(Text, nullable=True)
+    after_state = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())

@@ -16,6 +16,7 @@ import AttributionImportView from './components/Liquidador/AttributionImportView
 import WorkbookImportView from './components/Liquidador/WorkbookImportView'
 import OperationView from './components/Liquidador/OperationView'
 import DashboardView from './components/Liquidador/DashboardView'
+import ExecutiveDashboard from './components/Liquidador/ExecutiveDashboard'
 import PaymentSchemesConfigView from './components/Liquidador/PaymentSchemesConfigView'
 import ReconciliationView from './components/Liquidador/ReconciliationView'
 import UnifiedLoadView from './components/Liquidador/UnifiedLoadView'
@@ -56,6 +57,7 @@ function App() {
           <Route path="operation" element={<OperationView />} />
           <Route path="configuracion" element={<PaymentSchemesConfigView />} />
           <Route path="dashboard" element={<DashboardView />} />
+          <Route path="ejecutivo" element={<ExecutiveDashboard />} />
 
           {/* ── Always-visible advanced routes (admin / auxiliares) ── */}
           <Route path="supervisor-bonus" element={<SupervisorBonusView />} />

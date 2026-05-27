@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import axios from 'axios'
 import {
   getQualityContract, getSchemes,
   createCutoff, createCutoffFromCohort, createSweepCutoff, listCutoffs, getCutoffSummary, getCutoffLines,
@@ -7,6 +8,21 @@ import {
 } from '../../api/scoutLiq'
 import type { SchemeResponse } from '../../api/scoutLiq'
 import { AcquisitionBadge, AnchorBadgeStack } from './AcquisitionBadges'
+import {
+  classifyOperationalSeverity,
+  SeverityDot,
+  SeverityBadge,
+  OperationalSummaryBar,
+  QuickFilterPills,
+  type SummaryCounts,
+  type SeverityLevel,
+} from './OperationalLayer'
+import {
+  ActionToolbar,
+  SelectAllCheckbox,
+  RowCheckbox,
+  useOperationalShortcuts,
+} from './OperationalActions'
 
 interface QualityContract { status: string; can_compute_trip_counts: boolean; uses_legacy_booleans_for_payment: boolean; sample_driver_trip_count: any; errors: string[] }
 interface CutoffRun { id: number; cutoff_name: string; hire_date_from: string; hire_date_to: string; status: string; quality_data_contract_status: string; conversion_metric_status: string; created_at: string; cohort_iso_week?: string; cohort_from?: string; cohort_to?: string; maturity_days?: number; scheme_name?: string; scheme_type?: string; version_name?: string; min_activated?: number; activation_rule?: string; quality_rule?: string; snapshot_locked_at?: string; config_snapshot?: any; cutoff_mode?: string }
@@ -184,6 +200,9 @@ export default function LiquidadorView() {
   const [filterPayment, setFilterPayment] = useState('')
   const [filterOrigin, setFilterOrigin] = useState('')
   const [filterAnchor, setFilterAnchor] = useState('')
+  const [operationalFilter, setOperationalFilter] = useState<SeverityLevel | string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [actionMsg, setActionMsg] = useState<string | null>(null)
   // Fase 3A.0
   const [searchQ, setSearchQ] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
@@ -221,6 +240,7 @@ export default function LiquidadorView() {
     setSelectedCutoff(id)
     setSelectedScoutId(null)
     setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin(''); setFilterAnchor('')
+    setOperationalFilter(null)
     setSearchQ(''); setSelectedTags([])
     Promise.all([getCutoffSummary(id), getCutoffLines(id)])
       .then(([s, l]) => { setSummaries(s); setLines(l.lines || []); setTagCounts(l.tag_counts || {}) })
@@ -252,6 +272,7 @@ export default function LiquidadorView() {
 
   const clearLineFilters = () => {
     setFilterLifecycle(''); setFilterPayment(''); setFilterOrigin(''); setFilterAnchor('')
+    setOperationalFilter(null)
     setSelectedScoutId(null)
   }
 
@@ -288,6 +309,55 @@ export default function LiquidadorView() {
     if (filterAnchor === 'weak') return l.anchor_confidence === 'weak'
     if (filterAnchor === 'blocked') return l.payment_anchor_status === 'blocked_missing_official_anchor'
     return true
+  })
+
+  const displayLines = operationalFilter
+    ? filteredLines.filter(l => classifyOperationalSeverity(l).severity === operationalFilter)
+    : filteredLines
+
+  const sortedLines = [...displayLines].sort((a, b) => {
+    const sa = classifyOperationalSeverity(a).severity
+    const sb = classifyOperationalSeverity(b).severity
+    const order = { CRITICAL: 0, WARNING: 1, OK: 2 }
+    return (order[sa as SeverityLevel] ?? 3) - (order[sb as SeverityLevel] ?? 3)
+  })
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id) else next.add(id)
+      return next
+    })
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === sortedLines.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(sortedLines.map(l => l.id)))
+    }
+  }
+
+  const handleBulkAction = async (action: string, reason?: string, notes?: string, overrideReason?: string) => {
+    const ids = Array.from(selectedIds)
+    try {
+      const { data } = await axios.post('/api/scout-liq/lines/bulk-action', {
+        line_ids: ids, action,
+        reason, notes, override_reason: overrideReason,
+      })
+      setActionMsg(`${action}: ${data.applied} aplicadas, ${data.skipped} omitidas`)
+      setSelectedIds(new Set())
+      if (selectedCutoff) loadCutoffDetails(selectedCutoff)
+    } catch (err: any) {
+      setActionMsg(`Error: ${err.response?.data?.detail || err.message}`)
+    }
+  }
+
+  useOperationalShortcuts({
+    onApproveAll: () => selectedIds.size > 0 && handleBulkAction('approve'),
+    onReviewAll: () => selectedIds.size > 0 && handleBulkAction('manual_review'),
+    onBlockAll: () => selectedIds.size > 0 && handleBulkAction('block'),
+    onClear: () => setSelectedIds(new Set()),
   })
 
   const originOptions = [...new Set(lines.map(l => l.origin).filter(Boolean))].sort()
@@ -348,11 +418,20 @@ export default function LiquidadorView() {
     window.open(getCutoffExportFinancialUrl(id), '_blank')
   }
 
-  if (loading && !contract) return <div className="text-gray-500 p-4">Cargando...</div>
+  if (loading && (!contract && lines.length === 0)) return <div className="text-gray-500 p-4">Cargando...</div>
 
   return (
     <div className="space-y-6">
       {error && <div className="bg-red-50 border border-red-200 rounded p-3 text-red-700 text-sm">{error}</div>}
+      {actionMsg && (
+        <div className={`text-xs px-3 py-1.5 rounded border ${
+          actionMsg.startsWith('Error') ? 'border-red-200 bg-red-50 text-red-700'
+          : 'border-green-200 bg-green-50 text-green-700'
+        }`}>
+          {actionMsg}
+          <button onClick={() => setActionMsg(null)} className="ml-2 text-gray-400 hover:text-gray-600">x</button>
+        </div>
+      )}
 
       {/* Quality contract */}
       {contract && (
@@ -394,259 +473,29 @@ export default function LiquidadorView() {
               className={`px-3 py-1 text-xs rounded ${createMode === 'dates' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
               Por Fechas
             </button>
-          </div>
-        </div>
-        {createMode === 'cohort' ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Cohorte ISO</label>
-              <select value={formCohort} onChange={e => setFormCohort(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-                <option value="">Seleccionar...</option>
-                {cohorts.map((c: any) => <option key={c.cohort_iso_week} value={c.cohort_iso_week}>{c.cohort_label || c.cohort_iso_week}</option>)}
-              </select>
-            </div>
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Tipo Esquema</label>
-              <select value={formSchemeType} onChange={e => setFormSchemeType(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-                <option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
-              </select>
-            </div>
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Origen (opcional)</label>
-              <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-                <option value="">Todos</option><option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
-              </select>
-            </div>
-            <div className="flex items-end">
-              <button onClick={handleCreate} disabled={!formCohort} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">Crear desde Cohorte</button>
-            </div>
-          </div>
-        ) : createMode === 'sweep' ? (
-          <div className="space-y-2">
-            <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 text-xs text-purple-700">
-              Busca todos los conductores activos que cumplen la regla del esquema vigente hoy y que nunca fueron pagados. No se ejecuta automaticamente.
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-              <div><label className="block text-xs font-medium text-gray-500 mb-1">Tipo Esquema</label>
-                <select value={formSchemeType} onChange={e => setFormSchemeType(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-                  <option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
-                </select>
-              </div>
-              <div><label className="block text-xs font-medium text-gray-500 mb-1">Origen (opcional)</label>
-                <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-                  <option value="">Todos</option><option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
-                </select>
-              </div>
-              <div className="flex items-end">
-                <button onClick={handleSweep} disabled={!formSchemeType}
-                  className="px-4 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50">
-                  Crear Barrido
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Nombre</label><input value={formName} onChange={e => setFormName(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Desde</label><input type="date" value={formFrom} onChange={e => setFormFrom(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Hasta</label><input type="date" value={formTo} onChange={e => setFormTo(e.target.value)} className="w-full border rounded px-3 py-2 text-sm" /></div>
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Esquema</label>
-              <select value={formScheme} onChange={e => setFormScheme(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-                <option value="">Seleccionar...</option>
-                {schemes.filter(s => s.active).map(s => <option key={s.id} value={s.id}>{s.scheme_name}</option>)}
-              </select>
-            </div>
-            <div><label className="block text-xs font-medium text-gray-500 mb-1">Origen</label>
-              <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)} className="w-full border rounded px-3 py-2 text-sm">
-                <option value="">Todos</option><option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
-              </select>
-            </div>
-            <div className="flex items-end">
-              <button onClick={handleCreate} disabled={!formScheme} className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50">Generar Corte</button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Cutoff list */}
-      {cutoffs.length > 0 && (
-        <div className="bg-white border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b"><tr>
-              <th className="text-left p-3">ID</th><th className="text-left p-3">Nombre</th><th className="text-left p-3">Cohorte</th><th className="text-left p-3">Esquema</th><th className="text-left p-3">Estado</th><th className="text-left p-3">Acciones</th>
-            </tr></thead>
-            <tbody>
-              {cutoffs.map(c => (
-                <tr key={c.id} className="border-t hover:bg-gray-50">
-                  <td className="p-3 font-mono text-xs">{c.id}</td>
-                  <td className="p-3 font-medium cursor-pointer text-blue-700 hover:underline" onClick={() => loadCutoffDetails(c.id)}>{c.cutoff_name}</td>
-                  <td className="p-3 text-xs">
-                    {c.cohort_iso_week ? (
-                      <span className="font-mono">{c.cohort_iso_week}</span>
-                    ) : (
-                      <span className="text-gray-400">{c.hire_date_from} → {c.hire_date_to}</span>
-                    )}
-                  </td>
-                  <td className="p-3 text-xs">
-                    {c.scheme_name ? (
-                      <span>{c.scheme_name} <span className="text-gray-400">{c.version_name}</span></span>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="p-3"><span className={`px-2 py-0.5 rounded text-xs ${c.status === 'draft' ? 'bg-gray-100' : c.status === 'calculated' ? 'bg-blue-100 text-blue-700' : c.status === 'reviewed' ? 'bg-yellow-100 text-yellow-700' : c.status === 'approved' ? 'bg-green-100 text-green-700' : c.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-yellow-100 text-yellow-700'}`}>{c.status}{c.cutoff_mode === 'PAYABLE_SWEEP' ? <span className="ml-1 px-1 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-medium">Barrido</span> : c.cohort_iso_week ? <span className="ml-1 px-1 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-medium">Cohorte</span> : null}</span></td>
-                  <td className="p-3 flex gap-1 flex-wrap">
-                    <button onClick={() => loadCutoffDetails(c.id)} className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs hover:bg-gray-200">Ver</button>
-                    {c.status === 'calculated' && <button onClick={() => action(reviewCutoff, c.id, 'Revisar')} className="px-2 py-1 bg-yellow-100 text-yellow-700 rounded text-xs hover:bg-yellow-200">Revisar</button>}
-                    {c.status === 'reviewed' && contract?.can_compute_trip_counts && <button onClick={() => action(approveCutoff, c.id, 'Aprobar')} className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs hover:bg-green-200">Aprobar</button>}
-                    {c.status === 'approved' && <button onClick={() => action(markCutoffPaid, c.id, 'Pagar')} className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs hover:bg-purple-200">Pagar</button>}
-                    <button onClick={() => exportCsv(c.id)} className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs hover:bg-gray-200">CSV</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Summary */}
-      {selectedCutoff && summaries.length > 0 && (
-        <div>
-          {(() => {
-            const c = cutoffs.find(x => x.id === selectedCutoff)
-            if (!c) return null
-            const snap = c.config_snapshot
-            return (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-xs space-y-1">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-semibold text-blue-800 text-sm">Regla usada en este corte</span>
-                  {c.cutoff_mode === 'PAYABLE_SWEEP' && (
-                    <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-bold">Barrido Pagable</span>
-                  )}
-                  {(!c.cutoff_mode || c.cutoff_mode === 'COHORT') && c.cohort_iso_week && (
-                    <span className="px-2 py-0.5 bg-blue-100 text-blue-600 rounded text-[10px] font-bold">Cohorte {c.cohort_iso_week}</span>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 text-blue-700">
-                  <div><span className="text-blue-400">Esquema:</span> {snap?.scheme_name || c.scheme_name || '-'}</div>
-                  <div><span className="text-blue-400">Version:</span> {snap?.version_name || c.version_name || '-'}</div>
-                  <div><span className="text-blue-400">Cohorte:</span> {c.cohort_iso_week || (c.hire_date_from ? `${c.hire_date_from} -> ${c.hire_date_to}` : '-')}</div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 text-blue-600">
-                  <div><span className="text-blue-400">Hito base:</span> {snap?.activation_rule_label || c.activation_rule || '-'}</div>
-                  <div><span className="text-blue-400">Hito calidad:</span> {snap?.quality_rule_label || c.quality_rule || '-'}</div>
-                  <div><span className="text-blue-400">Formula:</span> {snap?.payment_formula_label || '-'}</div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 text-blue-600">
-                  <div><span className="text-blue-400">Minimo:</span> {snap?.minimum_rule_label || '-'}</div>
-                  <div><span className="text-blue-400">Tramos:</span> <span className="font-mono">{snap?.tier_summary_label || '-'}</span></div>
-                  <div><span className="text-blue-400">Pago:</span> {snap?.pays_on_label || '-'}</div>
-                </div>
-                {(snap?.frozen_at || c.snapshot_locked_at) && (
-                  <div className="text-gray-400 text-[10px]">
-                    Snapshot congelado: {(snap?.frozen_at || c.snapshot_locked_at || '').replace('T', ' ').slice(0, 19)}
-                  </div>
-                )}
-              </div>
-            )
-          })()}
-          <h3 className="font-semibold mb-3">Resumen por Scout (Corte #{selectedCutoff})</h3>
-          <div className="bg-white border rounded-lg overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-gray-50 border-b"><tr>
-                <th className="text-left p-2">Scout</th><th className="text-left p-2">Origen</th><th className="text-left p-2">Afiliados</th><th className="text-left p-2">Activados</th><th className="text-left p-2">5V/7D</th><th className="text-left p-2">5V/14D</th><th className="text-left p-2">Conv 5V/7D</th><th className="text-left p-2">Tramo</th><th className="text-left p-2">Pago/act</th><th className="text-left p-2">Total</th><th className="text-left p-2">Estado</th>
-              </tr></thead>
-              <tbody>
-                {summaries.map(s => (
-                  <tr key={s.id} className="border-t hover:bg-gray-50 cursor-pointer" onClick={() => applyScoutFilter(s.scout_id)}>
-                    <td className="p-2 font-medium">{s.scout_name}</td><td className="p-2">{s.origin || '-'}</td><td className="p-2 font-bold">{s.total_affiliations}</td>
-                    <td className="p-2 font-bold text-green-700">{s.total_activated ?? s.drivers_1plus_0_7}</td>
-                    <td className="p-2 font-bold text-blue-700">{s.drivers_5plus_0_7}</td>
-                    <td className="p-2">{s.total_converted_5v14d ?? s.drivers_5plus_0_14}</td>
-                    <td className="p-2">{Number(s.conversion_rate_5v7d ?? s.conversion_rate * 100).toFixed(1)}%</td>
-                    <td className="p-2">{s.tier_reached ? `${Number(s.tier_reached * 100).toFixed(0)}%` : '-'}</td>
-                    <td className="p-2">S/ {Number(s.payout_per_activated ?? s.payment_per_converted_driver).toFixed(2)}</td>
-                    <td className="p-2 font-bold">S/ {Number(s.amount_calculated).toFixed(2)}</td>
-                    <td className="p-2"><span className={`px-1.5 py-0.5 rounded text-xs ${s.status === 'pending' ? 'bg-blue-100 text-blue-700' : s.status === 'blocked' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{s.status}{s.blocked_reason ? `: ${s.blocked_reason?.substring(0, 40)}` : ''}</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Anchor Quality Summary Cards (Fase 2A.3) ── */}
-      {selectedCutoff && lines.length > 0 && (
-        <div className="mb-3">
-          <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-            <AnchorStatCard label="Total" value={lines.length} />
-            <AnchorStatCard label="Pagables" value={lines.filter(l => l.is_auto_payable_anchor).length} color="green" />
-            <AnchorStatCard label="Block Anchor" value={lines.filter(l => l.payment_anchor_status === 'blocked_missing_official_anchor').length} color="red" alert />
-            <AnchorStatCard label="Reactivados" value={lines.filter(l => l.reactivation_flag).length} color="orange" alert />
-            <AnchorStatCard label="Fleet" value={lines.filter(l => l.acquisition_type === 'fleet_migration').length} color="blue" />
-            <AnchorStatCard label="Fallback" value={lines.filter(l => l.anchor_confidence === 'medium' && l.acquisition_type !== 'fleet_migration').length} color="yellow" />
-            <AnchorStatCard label="Weak" value={lines.filter(l => l.anchor_confidence === 'weak').length} color="red" />
-            <AnchorStatCard label="Gap >30d" value={lines.filter(l => l.days_hire_vs_anchor && Math.abs(l.days_hire_vs_anchor) > 30).length} color="amber" alert />
-          </div>
-        </div>
-      )}
-
-      {/* Lines detail — enhanced operational view */}
-      {selectedCutoff && lines.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold">Lineas del Corte</h3>
-            <span className="text-xs text-gray-400">{lines.length} lineas</span>
-          </div>
-
-          {/* ── Fase 3A.0: Search + Tag chips ── */}
-          <div className="space-y-2 mb-3">
-            <div className="relative">
-              <input type="text" value={searchQ}
-                onChange={e => handleSearchChange(e.target.value)}
-                placeholder="Buscar driver, licencia, placa..."
-                className="w-full border border-gray-200 rounded px-3 py-1.5 text-xs focus:outline-none focus:border-blue-300"
-              />
-              {searchQ && (
-                <button onClick={() => handleSearchChange('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">X</button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {Object.entries(tagCounts).map(([tag, count]) => {
-                const isActive = selectedTags.includes(tag)
-                const colors: Record<string, string> = {
-                  REACTIVATED: 'border-orange-300 text-orange-700 bg-orange-50',
-                  FLEET: 'border-blue-300 text-blue-700 bg-blue-50',
-                  FALLBACK: 'border-yellow-300 text-yellow-700 bg-yellow-50',
-                  WEAK: 'border-red-300 text-red-700 bg-red-50',
-                  BLOCKED: 'border-red-400 text-red-800 bg-red-100',
-                  PAYABLE: 'border-green-300 text-green-700 bg-green-50',
-                  MANUAL_REVIEW: 'border-yellow-300 text-yellow-700 bg-yellow-50',
-                  GAP_30: 'border-amber-300 text-amber-700 bg-amber-50',
-                  NEW: 'border-emerald-300 text-emerald-700 bg-emerald-50',
-                }
-                return (
-                  <button key={tag} onClick={() => handleTagToggle(tag)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
-                      isActive ? `${colors[tag] || 'border-gray-300'} ring-1` : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
-                    }`}>
-                    {tag.replace('_', ' ')} ({count})
-                  </button>
-                )
-              })}
-              {(selectedTags.length > 0 || searchQ) && (
-                <button onClick={() => { setSelectedTags([]); setSearchQ(''); if (selectedCutoff) loadCutoffDetails(selectedCutoff) }}
-                  className="px-2 py-0.5 text-[10px] text-red-500 hover:underline">Limpiar</button>
-              )}
             </div>
           </div>
 
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-semibold">
-              Detalle por Conductor (Corte #{selectedCutoff})
-              {selectedScoutId ? <span className="text-blue-600"> — Scout #{selectedScoutId}</span> : ''}
-            </h3>
-            <span className="text-xs text-gray-400">{filteredLines.length} de {lines.length} conductores</span>
-          </div>
+          {/* Operational Quick Filters */}
+          <QuickFilterPills
+            options={[
+              { key: 'CRITICAL', label: 'Criticos', count: lines.filter(l => classifyOperationalSeverity(l).severity === 'CRITICAL').length },
+              { key: 'WARNING', label: 'Warnings', count: lines.filter(l => classifyOperationalSeverity(l).severity === 'WARNING').length },
+              { key: 'OK', label: 'OK', count: lines.filter(l => classifyOperationalSeverity(l).severity === 'OK').length },
+              { key: 'PAID', label: 'Pagados', count: lines.filter(l => l.payment_status === 'paid' || l.already_paid).length },
+              { key: 'BLOCKED', label: 'Bloqueados', count: lines.filter(l => l.payment_status === 'blocked').length },
+              { key: 'NO_LEAD', label: 'Sin fecha lead', count: lines.filter(l => l.acquisition_type === 'cabinet_unknown_no_lca').length },
+            ]}
+            activeFilter={operationalFilter as string | null}
+            onFilterClick={(key) => {
+              if (key === 'CRITICAL' || key === 'WARNING' || key === 'OK') {
+                setOperationalFilter(key as SeverityLevel)
+              } else if (key === 'BLOCKED') { setFilterPayment('blocked'); setOperationalFilter(null) }
+              else if (key === 'PAID') { setFilterPayment('paid'); setOperationalFilter(null) }
+              else if (key === 'NO_LEAD') { setFilterAnchor('fallback'); setOperationalFilter(null) }
+              else { setOperationalFilter(null) }
+            }}
+          />
 
           {/* Presets */}
           <div className="flex flex-wrap gap-1 mb-2">
@@ -742,6 +591,15 @@ export default function LiquidadorView() {
           <div className="bg-white border rounded-lg overflow-x-auto max-h-[60vh] overflow-y-auto">
             <table className="w-full text-xs">
               <thead className="bg-gray-50 sticky top-0 border-b z-10"><tr>
+                <th className="text-left p-1 w-6">
+                  <SelectAllCheckbox
+                    checked={sortedLines.length > 0 && selectedIds.size === sortedLines.length}
+                    onChange={toggleSelectAll}
+                    total={sortedLines.length}
+                    selectedCount={selectedIds.size}
+                  />
+                </th>
+                <th className="text-left p-2 w-6"></th>
                 <th className="text-left p-2">Anchor</th>
                 <th className="text-left p-2">Progreso</th>
                 <th className="text-left p-2">Driver ID</th>
@@ -752,17 +610,25 @@ export default function LiquidadorView() {
                 <th className="text-center p-2 w-10">Gap</th>
                 <th className="text-left p-2">Pago</th>
                 <th className="text-left p-2">Motivo</th>
+                <th className="text-left p-2">Accion</th>
                 <th className="text-right p-2">S/</th>
               </tr></thead>
               <tbody className="divide-y divide-gray-50">
-                {filteredLines.map(l => {
+                {sortedLines.map(l => {
+                  const sv = classifyOperationalSeverity(l)
                   const lifecycle = deriveDisplayLifecycle(l)
                   const isReactivated = l.reactivation_flag
                   const isBlocked = l.payment_anchor_status === 'blocked_missing_official_anchor'
                   const isWeak = l.anchor_confidence === 'weak'
-                  const rowBg = isBlocked ? 'bg-red-50/30' : isReactivated ? 'bg-orange-50/30' : ''
+                  const rowBg = sv.severity === 'CRITICAL' ? 'bg-red-50/40' : isBlocked ? 'bg-red-50/30' : isReactivated ? 'bg-orange-50/30' : ''
                   return (
                     <tr key={l.id} className={`hover:bg-blue-50/30 transition-colors ${rowBg}`}>
+                      <td className="p-1.5">
+                        <RowCheckbox checked={selectedIds.has(l.id)} onChange={() => toggleSelect(l.id)} />
+                      </td>
+                      <td className="p-1.5">
+                        <SeverityDot severity={sv.severity} />
+                      </td>
                       <td className="p-1.5">
                         <div className="space-y-0.5">
                           <div className="text-[11px] font-mono font-medium text-gray-800">
@@ -830,6 +696,15 @@ export default function LiquidadorView() {
                           }
                         </span>
                       </td>
+                      <td className="p-2 text-[10px] max-w-[120px]">
+                        <span className={`truncate block ${
+                          sv.severity === 'CRITICAL' ? 'text-red-700 font-medium' :
+                          sv.severity === 'WARNING' ? 'text-amber-700' :
+                          'text-gray-400'
+                        }`} title={sv.nextAction}>
+                          {sv.severityLabel}
+                        </span>
+                      </td>
                       <td className="p-2 text-right font-mono text-[11px] font-medium whitespace-nowrap">
                         {l.payout_eligible_flag && l.calculated_amount
                           ? <span className="text-emerald-700">S/ {Number(l.calculated_amount).toFixed(0)}</span>
@@ -844,6 +719,13 @@ export default function LiquidadorView() {
           </div>
         </div>
       )}
+
+      <ActionToolbar
+        selectedCount={selectedIds.size}
+        selectedIds={Array.from(selectedIds)}
+        onAction={handleBulkAction}
+        onClear={() => setSelectedIds(new Set())}
+      />
     </div>
   )
 }

@@ -65,7 +65,7 @@ export default function AcquisitionAnchorView() {
 
       {/* Warning Banner */}
       <div className="bg-amber-50 border border-amber-200 rounded p-3 text-amber-700 text-xs">
-        Cabinet sin lead_created_at usa fallback. Estas cohortes son aproximadas y deben auditarse.
+        Conductores sin fecha de lead usan fecha operativa como fallback. Las cohortes aproximadas deben auditarse.
       </div>
 
       {summary && (
@@ -73,9 +73,9 @@ export default function AcquisitionAnchorView() {
           {/* Overview Cards */}
           <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
             <StatCard label="Total Drivers" value={summary.total} />
-            <StatCard label="Cabinet sin LCA" value={summary.cabinet_missing_lca} sub={summary.cabinet_recovered_lca > 0 ? `${summary.cabinet_recovered_lca} recuperados` : undefined} />
+            <StatCard label="Sin fecha lead" value={summary.cabinet_missing_lca} sub={summary.cabinet_recovered_lca > 0 ? `${summary.cabinet_recovered_lca} recuperados` : undefined} />
             <StatCard label="Reactivados" value={summary.reactivation_count} />
-            <StatCard label="Fleet sin hire" value={summary.fleet_without_hire_date} />
+            <StatCard label="Flota sin hire" value={summary.fleet_without_hire_date} />
             <StatCard label="Warnings" value={summary.warning_count} alert={summary.warning_count > 0} />
             <StatCard label="Cobertura LCA" value={`${((summary.total - summary.cabinet_missing_lca) / summary.total * 100).toFixed(0)}%`} />
           </div>
@@ -93,8 +93,8 @@ export default function AcquisitionAnchorView() {
             <select value={filterOrigin} onChange={e => setFilterOrigin(e.target.value)}
               className="border border-gray-200 rounded px-2 py-1 text-xs">
               <option value="">Todos los origenes</option>
-              <option value="cabinet">Cabinet</option>
-              <option value="fleet">Fleet</option>
+              <option value="cabinet">Adquisicion</option>
+              <option value="fleet">Flota</option>
             </select>
             <select value={filterSource} onChange={e => setFilterSource(e.target.value)}
               className="border border-gray-200 rounded px-2 py-1 text-xs">
@@ -121,12 +121,12 @@ export default function AcquisitionAnchorView() {
                   <tr>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Driver ID</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Origen</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-500">Anchor Date</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-500">Fecha Resuelta</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Fuente</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Confianza</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Tipo</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Gap (d)</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-500">LCA Cab</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-500">Lead Cab</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">HD Cab</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">HD Drv</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Warning</th>
@@ -136,9 +136,23 @@ export default function AcquisitionAnchorView() {
                   {samples.map((s, i) => (
                     <tr key={i} className={s.reactivation_flag ? 'bg-orange-50' : 'hover:bg-gray-50'}>
                       <td className="px-3 py-1.5 font-mono text-[10px]">{s.driver_id?.slice(0, 16)}...</td>
-                      <td className="px-3 py-1.5">{s.origen}</td>
-                      <td className="px-3 py-1.5 font-mono text-[10px]">{s.acquisition_anchor_date || '—'}</td>
-                      <td className="px-3 py-1.5 text-gray-500 text-[10px]">{s.anchor_source.replace('cabinet_drivers.', 'cab.').replace('cabinet_leads.', 'leads.')}</td>
+                      <td className="px-3 py-1.5">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] border ${s.origen === 'fleet' ? 'text-blue-700 bg-blue-50 border-blue-200' : 'text-green-700 bg-green-50 border-green-200'}`}>
+                          {s.origen === 'cabinet' ? 'Adquisicion' : s.origen === 'fleet' ? 'Flota' : s.origen}
+                        </span>
+                      </td>
+                      <td className="px-3 py-1.5 font-mono text-[10px] font-semibold">
+                        {s.lead_created_at_resolved ? (
+                          <span className="text-green-700">{s.lead_created_at_resolved}</span>
+                        ) : s.acquisition_anchor_date ? (
+                          <span className="text-amber-600">{s.acquisition_anchor_date}</span>
+                        ) : '—'}
+                      </td>
+                      <td className="px-3 py-1.5 text-gray-500 text-[10px]" title={s.lead_created_at_source || s.anchor_source}>
+                        {s.lead_created_at_source && s.lead_created_at_source !== 'none' 
+                          ? s.lead_created_at_source.replace('lead_created_at_', '')
+                          : s.anchor_source.replace('cabinet_drivers.', 'src.').replace('cabinet_leads.', 'leads.')}
+                      </td>
                       <td className="px-3 py-1.5">
                         <span className={`px-1.5 py-0.5 rounded text-[10px] border ${confidenceColor(s.anchor_confidence)}`}>
                           {s.anchor_confidence}
@@ -149,8 +163,14 @@ export default function AcquisitionAnchorView() {
                       <td className="px-3 py-1.5 font-mono text-[10px]">{s.cabinet_lead_created_at?.slice(0, 10) || '—'}</td>
                       <td className="px-3 py-1.5 font-mono text-[10px]">{s.cabinet_hire_date?.slice(0, 10) || '—'}</td>
                       <td className="px-3 py-1.5 font-mono text-[10px]">{s.drivers_hire_date?.slice(0, 10) || '—'}</td>
-                      <td className="px-3 py-1.5 text-[10px] text-amber-600 max-w-[120px] truncate" title={s.anchor_warning || ''}>
-                        {s.anchor_warning || ''}
+                      <td className="px-3 py-1.5 text-[10px] max-w-[140px] truncate" title={s.lead_created_at_warning || s.anchor_warning || ''}>
+                        {(s.lead_created_at_warning || s.anchor_warning) ? (
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] border ${s.lead_created_at_status === 'missing' || s.lead_created_at_status === 'invalid_date' ? 'text-red-700 bg-red-50 border-red-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
+                            {s.lead_created_at_warning || s.anchor_warning}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
                       </td>
                     </tr>
                   ))}

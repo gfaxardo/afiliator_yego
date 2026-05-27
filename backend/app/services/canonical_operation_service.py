@@ -29,6 +29,36 @@ SOURCE_TABLE = settings.SOURCE_TABLE
 STATEMENT_TIMEOUT = "SET LOCAL statement_timeout = '15000ms'"
 
 
+def _lead_created_at_safe_date_expr(table_alias: str = "s") -> str:
+    """SQL expression that safely resolves lead_created_at as date from real columns.
+    Returns NULL if no valid date is present.
+    Uses LIKE format validation before cast to avoid timestamp errors on varchar."""
+    a = table_alias
+    return (
+        f"CASE "
+        f"WHEN {a}.origen = 'cabinet' "
+        f"AND {a}.lead_created_at_cabinet LIKE '____-__-__%' "
+        f"AND {a}.lead_created_at_cabinet IS NOT NULL "
+        f"THEN {a}.lead_created_at_cabinet::timestamp::date "
+        f"WHEN {a}.origen = 'fleet' "
+        f"AND {a}.lead_created_at_fleet LIKE '____-__-__%' "
+        f"AND {a}.lead_created_at_fleet IS NOT NULL "
+        f"THEN {a}.lead_created_at_fleet::timestamp::date "
+        f"ELSE NULL END"
+    )
+
+
+def _lead_created_at_raw_expr(table_alias: str = "s") -> str:
+    """SQL expression returning the raw lead_created_at string from the correct column."""
+    a = table_alias
+    return (
+        f"CASE "
+        f"WHEN {a}.origen = 'cabinet' THEN {a}.lead_created_at_cabinet::text "
+        f"WHEN {a}.origen = 'fleet' THEN {a}.lead_created_at_fleet::text "
+        f"ELSE NULL END"
+    )
+
+
 def _iso_year_expr(col: str) -> str:
     return f"EXTRACT(ISOYEAR FROM {col})::int"
 
@@ -41,10 +71,10 @@ def _build_iso_label(iy_expr: str, iw_expr: str) -> str:
 
 def _anchor_date_expr(table_alias: str = "s") -> str:
     """SQL expression for acquisition_anchor_date.
-    COALESCE chain: lead_created_at > hire_date > created_at.
-    Does NOT include drivers table or leads table (those are Python-level)."""
+    COALESCE chain: lead_created_at (resolved) > hire_date > created_at."""
+    lca = _lead_created_at_safe_date_expr(table_alias)
     return (
-        f"COALESCE({table_alias}.lead_created_at::date, "
+        f"COALESCE({lca}, "
         f"{table_alias}.hire_date::date, "
         f"{table_alias}.created_at::date)"
     )
@@ -61,7 +91,8 @@ def _date_column_raw(table_alias: str = "src", date_basis: str = "acquisition_an
     """Return date column expression as raw string (for cast operations)."""
     if date_basis == "hire_date_legacy":
         return f"{table_alias}.hire_date::text"
-    return (f"COALESCE({table_alias}.lead_created_at::text, "
+    lca_raw = _lead_created_at_raw_expr(table_alias)
+    return (f"COALESCE({lca_raw}, "
             f"{table_alias}.hire_date, "
             f"{table_alias}.created_at::text)")
 
@@ -215,7 +246,7 @@ def get_canonical_operation_snapshot(
             src.orders AS total_orders,
             src.status AS source_driver_status,
             COALESCE(src.updated_at::text, src.created_at::text, '') AS source_updated_at,
-            src.lead_created_at::text AS lead_created_at_raw,
+            {_lead_created_at_raw_expr("src")} AS lead_created_at_raw,
             src.hire_date::text AS hire_date_reference_raw,
             {dc} AS acquisition_anchor_date
         FROM {SOURCE_TABLE} src

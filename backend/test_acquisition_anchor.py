@@ -182,7 +182,8 @@ class TestResolveAcquisitionAnchor:
         row = {
             "driver_id": "abc123",
             "origen": "cabinet",
-            "lead_created_at": "2026-01-10T14:30:00",
+            "lead_created_at_cabinet": "2026-01-10T14:30:00",
+            "lead_created_at_fleet": None,
             "hire_date": "2026-01-10",
             "created_at": datetime(2026, 5, 15),
         }
@@ -200,7 +201,8 @@ class TestResolveAcquisitionAnchor:
         row = {
             "driver_id": "xyz789",
             "origen": "cabinet",
-            "lead_created_at": "2026-03-15T10:00:00",
+            "lead_created_at_cabinet": "2026-03-15T10:00:00",
+            "lead_created_at_fleet": None,
             "hire_date": "2025-09-01",
             "created_at": datetime(2026, 5, 15),
         }

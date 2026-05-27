@@ -13,6 +13,7 @@ import {
   type ReviewAuditEntry,
 } from '../../api/scoutLiq'
 import { AcquisitionBadge, AnchorBadgeStack } from './AcquisitionBadges'
+import { classifyReviewSeverity, SeverityDot, OperationalSummaryBar, type SummaryCounts } from './OperationalLayer'
 
 export default function AnchorReviewQueueView() {
   const [items, setItems] = useState<ReviewQueueItem[]>([])
@@ -126,6 +127,33 @@ export default function AnchorReviewQueueView() {
 
       {error && <div className="bg-red-50 border border-red-200 rounded p-3 text-red-700 text-xs">{error}</div>}
 
+      {/* Operational Summary */}
+      {items.length > 0 && (
+        (() => {
+          const severities = items.map(i => classifyReviewSeverity(i))
+          const counts: SummaryCounts = {
+            critical: severities.filter(s => s.severity === 'CRITICAL').length,
+            warning: severities.filter(s => s.severity === 'WARNING').length,
+            ok: severities.filter(s => s.severity === 'OK').length,
+            total: items.length,
+            paid: 0,
+            noScout: 0,
+            noLeadDate: severities.filter(s => s.severityLabel === 'Ancla debil').length,
+            blockedAnchor: items.filter(i => i.payment_anchor_status === 'blocked_missing_official_anchor').length,
+            observed: 0,
+          }
+          return (
+            <div className="mb-2">
+              <OperationalSummaryBar
+                counts={counts}
+                activeFilter={null}
+                onFilterClick={() => {}}
+              />
+            </div>
+          )
+        })()
+      )}
+
       {/* Summary Cards */}
       {summary && (
         <div className="grid grid-cols-3 md:grid-cols-9 gap-2">
@@ -211,6 +239,7 @@ export default function AnchorReviewQueueView() {
       <div className="bg-white border rounded-lg overflow-x-auto max-h-[60vh] overflow-y-auto">
         <table className="w-full text-xs">
           <thead className="bg-gray-50 sticky top-0 z-10"><tr>
+            <th className="text-left p-2 w-6"></th>
             <th className="text-left p-2">Driver</th>
             <th className="text-left p-2">Anchor Date</th>
             <th className="text-left p-2">Hire Ref</th>
@@ -221,8 +250,11 @@ export default function AnchorReviewQueueView() {
             <th className="text-left p-2">Actions</th>
           </tr></thead>
           <tbody className="divide-y divide-gray-50">
-            {items.map(item => (
-              <tr key={item.line_id} className={`hover:bg-gray-50 ${item.reactivation_flag ? 'bg-orange-50/30' : ''}`}>
+            {items.map(item => {
+              const sv = classifyReviewSeverity(item)
+              return (
+              <tr key={item.line_id} className={`hover:bg-gray-50 ${sv.severity === 'CRITICAL' ? 'bg-red-50/40' : item.reactivation_flag ? 'bg-orange-50/30' : ''}`}>
+                <td className="p-2"><SeverityDot severity={sv.severity} /></td>
                 <td className="p-2">
                   <div className="font-mono text-[10px]">{item.driver_id?.slice(0, 14)}...</div>
                   <div className="text-[10px] text-gray-400">{item.origin}</div>
@@ -284,7 +316,8 @@ export default function AnchorReviewQueueView() {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 
 const MAIN_TABS = [
+  { to: '/scout-liq/ejecutivo', label: 'Ejecutivo' },
   { to: '/scout-liq/centro-operativo', label: 'Centro Operativo' },
   { to: '/scout-liq/operation', label: 'Operacion' },
   { to: '/scout-liq/configuracion', label: 'Configuracion' },

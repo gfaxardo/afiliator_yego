@@ -55,8 +55,8 @@ const PAYS_ON_LABELS: Record<string, string> = {
 }
 
 const SCHEME_TYPE_LABELS: Record<string, string> = {
-  cabinet: 'Cabinet',
-  fleet: 'Fleet',
+  cabinet: 'Adquisicion',
+  fleet: 'Flota',
   custom: 'Custom',
 }
 
@@ -286,7 +286,7 @@ function FreshnessBanner({ freshness }: { freshness: CanonicalFreshness | null }
     'bg-red-50 border-red-200 text-red-700'
   return (
     <div className={`rounded border px-3 py-1.5 text-xs flex items-center gap-3 ${statusColor}`}>
-      <span className="font-semibold">Fuente: module_ct_cabinet_drivers</span>
+      <span className="font-semibold">Fuente: Registro de conductores</span>
       <span>·</span>
       <span>Ultimo hire_date: {freshness.source_max_hire_date || '—'}</span>
       <span>·</span>
@@ -386,7 +386,7 @@ export default function OperationView() {
       // Reload overrides
       getDriverOverrides(selectedRow.driver_id).then(setDriverOverrides).catch(() => {})
     } catch (e: any) {
-      alert(e.response?.data?.detail || e.message || 'Error')
+      setError(e.response?.data?.detail || e.message || 'Error')
     }
   }
 
@@ -515,7 +515,7 @@ export default function OperationView() {
           <div>
             <h2 className="text-base font-semibold text-gray-800">Operacion de Afiliaciones</h2>
             <p className="text-xs text-gray-400 mt-0.5">
-              Fuente: module_ct_cabinet_drivers
+              Fuente: Registro de conductores
               {data ? ` \u00b7 ${data.total} registros` : ''}
             </p>
           </div>

@@ -141,7 +141,7 @@ export default function PaymentView() {
   const lifecycles = [...new Set(lines.map(l => l.driver_lifecycle_status).filter(Boolean))].sort()
   const lineStatuses = [...new Set(lines.map(l => l.line_status).filter(Boolean))].sort()
 
-  const showSpinner = (loading && !cutoffs.length)
+  const showSpinner = loading && cutoffs.length === 0
 
   return (
     <div className="space-y-6">
@@ -203,13 +203,13 @@ export default function PaymentView() {
               <select value={formOrigin} onChange={e => setFormOrigin(e.target.value)}
                 className="w-full border rounded px-3 py-2 text-sm">
                 <option value="">Todos</option>
-                <option value="cabinet">Cabinet</option><option value="fleet">Fleet</option>
+                <option value="cabinet">Adquisicion</option><option value="fleet">Flota</option>
               </select>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Tipo Scout (opcional)</label>
               <input value={formScoutType} onChange={e => setFormScoutType(e.target.value)}
-                className="w-full border rounded px-3 py-2 text-sm" placeholder="cabinet, fleet..." />
+                className="w-full border rounded px-3 py-2 text-sm" placeholder="adquisicion, flota..." />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Notas</label>

@@ -33,8 +33,8 @@ const PAYS_ON_LABELS: Record<string, string> = {
 }
 
 const SCHEME_TYPE_LABELS: Record<string, string> = {
-  cabinet: 'Cabinet',
-  fleet: 'Fleet',
+  cabinet: 'Adquisicion',
+  fleet: 'Flota',
   custom: 'Custom',
 }
 

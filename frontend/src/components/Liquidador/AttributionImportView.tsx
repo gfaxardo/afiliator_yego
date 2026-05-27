@@ -35,7 +35,7 @@ export default function AttributionImportView() {
   useEffect(() => { loadBatches() }, [])
 
   async function loadBatches() {
-    try { setBatches(await listAttributionBatches()) } catch (_) {}
+    try { setBatches(await listAttributionBatches()) } catch (e: any) { setError(e?.message || 'Error al cargar batches') }
   }
 
   async function detectSheets(file: File) {

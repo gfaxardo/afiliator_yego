@@ -329,8 +329,8 @@ export default function CentroOperativoView() {
   }, [showErr])
 
   const refreshCutoffs = useCallback(async () => {
-    try { const c = await listCutoffs(); setCutoffs(c) } catch {}
-  }, [])
+    try { const c = await listCutoffs(); setCutoffs(c) } catch (e: any) { showErr('Error al refrescar cortes: ' + (e?.message || e)) }
+  }, [showErr])
 
   const handleReview = useCallback(async () => {
     if (!selectedCutoff) return; setApproving(true)

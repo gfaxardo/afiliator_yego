@@ -154,8 +154,8 @@ export default function ReconciliationView() {
               className="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"
             >
               <option value="">Todos</option>
-              <option value="cabinet">Cabinet</option>
-              <option value="fleet">Fleet</option>
+              <option value="cabinet">Adquisicion</option>
+              <option value="fleet">Flota</option>
               <option value="custom">Custom</option>
             </select>
           </div>

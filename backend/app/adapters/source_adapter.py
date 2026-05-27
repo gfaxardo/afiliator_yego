@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.config import settings
+from app.services.lead_created_at_resolver import resolve_lead_created_at
 
 
 SOURCE_TABLE = settings.SOURCE_TABLE
@@ -35,6 +36,13 @@ def _row_to_dict(row, col_names: List[str]) -> Dict[str, Any]:
     trips_0_7 = d.get("trips_0_7_count")
     trips_8_14 = d.get("trips_8_14_count")
     has_counts = trips_0_7 is not None and trips_8_14 is not None
+
+    lca = resolve_lead_created_at({
+        "origen": d.get("origen"),
+        "lead_created_at_cabinet": d.get("lead_created_at_cabinet"),
+        "lead_created_at_fleet": d.get("lead_created_at_fleet"),
+    })
+
     return {
         "driver_id": d.get("driver_id"),
         "driver_nombre": d.get("driver_nombre"),
@@ -70,6 +78,13 @@ def _row_to_dict(row, col_names: List[str]) -> Dict[str, Any]:
         ),
         "created_at": str(d.get("created_at")) if d.get("created_at") else None,
         "updated_at": str(d.get("updated_at")) if d.get("updated_at") else None,
+        "lead_created_at_cabinet": d.get("lead_created_at_cabinet"),
+        "lead_created_at_fleet": d.get("lead_created_at_fleet"),
+        "lead_created_at_resolved": lca["lead_created_at_resolved"],
+        "lead_created_at_source": lca["lead_created_at_source"],
+        "lead_created_at_status": lca["lead_created_at_status"],
+        "lead_created_at_warning": lca["lead_created_at_warning"],
+        "lead_created_at": lca["lead_created_at_resolved"],
     }
 
 

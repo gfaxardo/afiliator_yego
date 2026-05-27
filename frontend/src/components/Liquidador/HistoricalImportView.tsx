@@ -43,7 +43,7 @@ export default function HistoricalImportView() {
   useEffect(() => { loadBatches() }, [])
 
   async function loadBatches() {
-    try { setBatches(await listHistoricalImports()) } catch (_) {}
+    try { setBatches(await listHistoricalImports()) } catch (e: any) { setError(e?.message || 'Error al cargar batches') }
   }
 
   async function detectSheets(file: File) {

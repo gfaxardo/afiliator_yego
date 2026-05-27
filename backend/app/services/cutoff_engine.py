@@ -38,6 +38,7 @@ from app.services.acquisition_anchor_service import (
     _batch_load_drivers,
     _batch_match_leads,
 )
+from app.services.lead_created_at_resolver import resolve_lead_created_at
 
 
 def create_cutoff_run(
@@ -240,31 +241,44 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
         params = {f"did{i}": did for i, did in enumerate(all_driver_ids)}
         rows = db.execute(text(
             f"SELECT driver_id, hire_date, origen, viajes_0_7, viajes_8_14, orders, "
-            f"lead_created_at, created_at, driver_nombre, driver_apellido, driver_placa "
+            f"lead_created_at_cabinet, lead_created_at_fleet, created_at, driver_nombre, driver_apellido, driver_placa "
             f"FROM module_ct_cabinet_drivers WHERE driver_id IN ({placeholders})"
         ), params).fetchall()
         for r in rows:
+            lca = resolve_lead_created_at({
+                "origen": r[2],
+                "lead_created_at_cabinet": r[6],
+                "lead_created_at_fleet": r[7],
+            })
             source_dates[r[0]] = {
                 "hire_date_raw": r[1],
                 "origin": r[2],
                 "legacy_viajes_0_7": r[3],
                 "legacy_viajes_8_14": r[4],
                 "total_orders": r[5],
-                "lead_created_at": r[6],
-                "created_at": r[7],
-                "driver_nombre": r[8],
-                "driver_apellido": r[9],
-                "driver_placa": r[10],
+                "lead_created_at": lca["lead_created_at_resolved"],
+                "lead_created_at_cabinet": r[6],
+                "lead_created_at_fleet": r[7],
+                "lead_created_at_resolved": lca["lead_created_at_resolved"],
+                "lead_created_at_source": lca["lead_created_at_source"],
+                "lead_created_at_status": lca["lead_created_at_status"],
+                "lead_created_at_warning": lca["lead_created_at_warning"],
+                "created_at": r[8],
+                "driver_nombre": r[9],
+                "driver_apellido": r[10],
+                "driver_placa": r[11],
             }
             source_rows_for_anchor.append({
                 "driver_id": r[0],
                 "origen": r[2],
                 "hire_date": r[1],
-                "lead_created_at": r[6],
-                "created_at": r[7],
-                "driver_nombre": r[8],
-                "driver_apellido": r[9],
-                "driver_placa": r[10],
+                "lead_created_at": lca["lead_created_at_resolved"],
+                "lead_created_at_cabinet": r[6],
+                "lead_created_at_fleet": r[7],
+                "created_at": r[8],
+                "driver_nombre": r[9],
+                "driver_apellido": r[10],
+                "driver_placa": r[11],
             })
 
     # ── Fase 2: Load anchor enrichment data ──

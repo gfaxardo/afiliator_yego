@@ -34,7 +34,7 @@ const BADGE_STYLES: Record<string, string> = {
 const DEFAULT_LABELS: Record<string, string> = {
   NEW: 'NEW',
   REACTIVATED: 'REACT',
-  FLEET: 'FLEET',
+  FLEET: 'FLOTA',
   FALLBACK: 'FALLBACK',
   APPROX: 'APROX',
   PAYABLE: 'PAGABLE',

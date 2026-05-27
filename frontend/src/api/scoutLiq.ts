@@ -1162,6 +1162,95 @@ export async function getCutoffTrend(): Promise<TrendItem[]> {
   return data
 }
 
+// ── Executive Dashboard (Fase 3) ──
+
+export interface ExecutiveSummary {
+  total_affiliations: number
+  total_source_drivers: number
+  total_connected: number
+  total_1_trip: number
+  total_5v7d: number
+  global_conversion_rate: number
+  total_to_pay: number
+  payout_eligible_count: number
+  cost_per_converted: number
+  blocked_lines: number
+  manual_review_lines: number
+  already_paid_lines: number
+  scouts_active: number
+  drivers_without_scout: number
+}
+
+export interface FunnelStage {
+  stage: string
+  label: string
+  count: number
+}
+
+export interface FunnelResponse {
+  stages: FunnelStage[]
+  message?: string
+}
+
+export interface ScoutRankItem {
+  scout_name: string
+  affiliations: number
+  activated: number
+  converted_5v7d: number
+  conversion_rate: number
+  total_payout: number
+}
+
+export interface OriginRankItem {
+  origin: string
+  affiliations: number
+  activated: number
+  converted_5v7d: number
+  conversion_rate: number
+  total_payout: number
+}
+
+export interface OperationalHealth {
+  cutoff_run_id: number
+  total: number
+  critical: number
+  warning: number
+  pending_review: number
+  supervisor_review: number
+  paid: number
+  no_scout: number
+  no_lead_date: number
+  duplicates: number
+  approved_manual: number
+  payable: number
+  blocked: number
+}
+
+export async function getExecutiveSummary(): Promise<ExecutiveSummary> {
+  const { data } = await api.get('/dashboard/executive-summary')
+  return data
+}
+
+export async function getDashboardFunnel(): Promise<FunnelResponse> {
+  const { data } = await api.get('/dashboard/funnel')
+  return data
+}
+
+export async function getScoutRanking(): Promise<ScoutRankItem[]> {
+  const { data } = await api.get('/dashboard/scout-ranking')
+  return data
+}
+
+export async function getOriginRanking(): Promise<OriginRankItem[]> {
+  const { data } = await api.get('/dashboard/origin-ranking')
+  return data
+}
+
+export async function getOperationalHealth(): Promise<OperationalHealth> {
+  const { data } = await api.get('/dashboard/operational-health')
+  return data
+}
+
 // ── Payment Scheme Admin ──
 
 export interface PaymentSchemeListItem {
@@ -1839,6 +1928,10 @@ export interface AcquisitionAnchorSample {
   cabinet_hire_date: string | null
   drivers_hire_date: string | null
   leads_lead_created_at: string | null
+  lead_created_at_resolved: string | null
+  lead_created_at_source: string | null
+  lead_created_at_status: string | null
+  lead_created_at_warning: string | null
 }
 
 export interface AcquisitionAnchorSamplesResponse {

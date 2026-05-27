@@ -2881,6 +2881,205 @@ def dashboard_trend(db: Session = Depends(get_db)):
     return get_cutoff_trend(db)
 
 
+# ── Executive Dashboard (Fase 3) ──
+
+@router.get("/dashboard/executive-summary")
+def executive_summary(db: Session = Depends(get_db)):
+    """Executive KPIs from canonical source + latest cutoff."""
+    t0 = time.perf_counter()
+    # Use cutoff_driver_lines for aggregated data
+    base = db.execute(text(
+        "SELECT "
+        "  COUNT(*) AS total, "
+        "  COUNT(*) FILTER (WHERE line_status = 'payable') AS payable, "
+        "  COUNT(*) FILTER (WHERE payment_status = 'paid' OR already_paid = true) AS paid, "
+        "  COUNT(*) FILTER (WHERE payment_status = 'blocked') AS blocked, "
+        "  COUNT(*) FILTER (WHERE anchor_review_status = 'pending_review') AS manual_review, "
+        "  COUNT(*) FILTER (WHERE is_converted_5trips_7d = true) AS converted_5v7d, "
+        "  COUNT(*) FILTER (WHERE activated_flag = true) AS activated, "
+        "  COALESCE(SUM(calculated_amount) FILTER (WHERE payout_eligible_flag = true), 0) AS total_payable, "
+        "  COUNT(*) FILTER (WHERE payout_eligible_flag = true) AS payout_eligible "
+        "FROM scout_liq_cutoff_driver_lines "
+        "WHERE cutoff_run_id = (SELECT id FROM scout_liq_cutoff_runs ORDER BY created_at DESC LIMIT 1)"
+    )).fetchone()
+
+    # Source drivers total
+    src_total = db.execute(text("SELECT COUNT(*) FROM module_ct_cabinet_drivers")).scalar() or 0
+
+    # Connected (drivers with 1+ trip)
+    connected = db.execute(text(
+        "SELECT COUNT(DISTINCT driver_id) FROM scout_liq_cutoff_driver_lines "
+        "WHERE trips_0_7_count > 0"
+    )).scalar() or 0
+
+    # Scouts active
+    scouts_active = db.execute(text(
+        "SELECT COUNT(DISTINCT scout_id) FROM scout_liq_cutoff_driver_lines "
+        "WHERE cutoff_run_id = (SELECT id FROM scout_liq_cutoff_runs ORDER BY created_at DESC LIMIT 1)"
+    )).scalar() or 0
+
+    # Without scout
+    without_scout = db.execute(text(
+        "SELECT COUNT(*) FROM scout_liq_cutoff_driver_lines "
+        "WHERE line_status = 'no_scout' OR blocked_reason ILIKE '%sin scout%'"
+    )).scalar() or 0
+
+    total = base[0] or 0
+    payable = base[1] or 0
+    paid = base[2] or 0
+    blocked = base[3] or 0
+    manual_review = base[4] or 0
+    converted_5v7d = base[5] or 0
+    activated = base[6] or 0
+    total_payable = float(base[7] or 0)
+    payout_eligible = base[8] or 0
+
+    conv_rate = (converted_5v7d / activated * 100) if activated > 0 else 0
+    cost_per = (total_payable / converted_5v7d) if converted_5v7d > 0 else 0
+
+    return {
+        "total_affiliations": total,
+        "total_source_drivers": src_total,
+        "total_connected": connected,
+        "total_1_trip": activated,
+        "total_5v7d": converted_5v7d,
+        "global_conversion_rate": round(conv_rate, 1),
+        "total_to_pay": round(total_payable, 2),
+        "payout_eligible_count": payout_eligible,
+        "cost_per_converted": round(cost_per, 2),
+        "blocked_lines": blocked,
+        "manual_review_lines": manual_review,
+        "already_paid_lines": paid,
+        "scouts_active": scouts_active,
+        "drivers_without_scout": without_scout,
+        "_timing_ms": round((time.perf_counter() - t0) * 1000),
+    }
+
+
+@router.get("/dashboard/funnel")
+def dashboard_funnel(db: Session = Depends(get_db)):
+    """Conversion funnel from the latest cutoff."""
+    row = db.execute(text(
+        "SELECT "
+        "  COUNT(*) AS affiliated, "
+        "  COUNT(*) FILTER (WHERE trips_0_7_count > 0) AS connected, "
+        "  COUNT(*) FILTER (WHERE activated_flag = true) AS trip1, "
+        "  COUNT(*) FILTER (WHERE is_converted_5trips_7d = true) AS cv5v7d, "
+        "  COUNT(*) FILTER (WHERE is_converted_5trips_14d = true) AS cv5v14d, "
+        "  COUNT(*) FILTER (WHERE trips_0_14_count >= 25) AS cv25 "
+        "FROM scout_liq_cutoff_driver_lines "
+        "WHERE cutoff_run_id = (SELECT id FROM scout_liq_cutoff_runs ORDER BY created_at DESC LIMIT 1)"
+    )).fetchone()
+
+    if not row:
+        return {"stages": [], "message": "No hay datos de cutoff disponibles"}
+
+    stages = [
+        {"stage": "affiliated", "label": "Afiliados", "count": row[0] or 0},
+        {"stage": "connected", "label": "Conectados", "count": row[1] or 0},
+        {"stage": "1_trip", "label": "1+ viaje (7d)", "count": row[2] or 0},
+        {"stage": "5v7d", "label": "5V/7D", "count": row[3] or 0},
+        {"stage": "5v14d", "label": "5V/14D", "count": row[4] or 0},
+        {"stage": "25_trips", "label": "25+ viajes", "count": row[5] or 0},
+    ]
+    return {"stages": stages}
+
+
+@router.get("/dashboard/scout-ranking")
+def dashboard_scout_ranking(db: Session = Depends(get_db)):
+    """Top scouts by conversion and payout."""
+    rows = db.execute(text(
+        "SELECT s.scout_name, COUNT(*) AS aff, "
+        "  COUNT(*) FILTER (WHERE l.activated_flag = true) AS activated, "
+        "  COUNT(*) FILTER (WHERE l.is_converted_5trips_7d = true) AS converted, "
+        "  COALESCE(SUM(l.calculated_amount) FILTER (WHERE l.payout_eligible_flag = true), 0) AS payout "
+        "FROM scout_liq_cutoff_driver_lines l "
+        "JOIN scout_liq_scouts s ON s.id = l.scout_id "
+        "WHERE l.cutoff_run_id = (SELECT id FROM scout_liq_cutoff_runs ORDER BY created_at DESC LIMIT 1) "
+        "GROUP BY s.scout_name ORDER BY payout DESC LIMIT 20"
+    )).fetchall()
+
+    return [
+        {
+            "scout_name": r[0], "affiliations": r[1], "activated": r[2],
+            "converted_5v7d": r[3],
+            "conversion_rate": round((r[3] / r[2] * 100) if r[2] > 0 else 0, 1),
+            "total_payout": round(float(r[4] or 0), 2),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/dashboard/origin-ranking")
+def dashboard_origin_ranking(db: Session = Depends(get_db)):
+    """Conversion by origin."""
+    rows = db.execute(text(
+        "SELECT COALESCE(origin, 'unknown') AS orig, COUNT(*) AS aff, "
+        "  COUNT(*) FILTER (WHERE activated_flag = true) AS activated, "
+        "  COUNT(*) FILTER (WHERE is_converted_5trips_7d = true) AS converted, "
+        "  COALESCE(SUM(calculated_amount) FILTER (WHERE payout_eligible_flag = true), 0) AS payout "
+        "FROM scout_liq_cutoff_driver_lines "
+        "WHERE cutoff_run_id = (SELECT id FROM scout_liq_cutoff_runs ORDER BY created_at DESC LIMIT 1) "
+        "GROUP BY origin ORDER BY aff DESC"
+    )).fetchall()
+
+    return [
+        {
+            "origin": r[0], "affiliations": r[1], "activated": r[2],
+            "converted_5v7d": r[3],
+            "conversion_rate": round((r[3] / r[2] * 100) if r[2] > 0 else 0, 1),
+            "total_payout": round(float(r[4] or 0), 2),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/dashboard/operational-health")
+def dashboard_operational_health(db: Session = Depends(get_db)):
+    """Operational health snapshot: criticals, warnings, blocks, etc."""
+    t0 = time.perf_counter()
+    cut_id = db.execute(text(
+        "SELECT id FROM scout_liq_cutoff_runs ORDER BY created_at DESC LIMIT 1"
+    )).scalar()
+
+    if not cut_id:
+        return {"status": "no_cutoff", "message": "No hay cortes disponibles"}
+
+    row = db.execute(text(
+        "SELECT "
+        "  COUNT(*) AS total, "
+        "  COUNT(*) FILTER (WHERE anchor_confidence = 'weak' OR payment_anchor_status = 'blocked_missing_official_anchor' OR line_status IN ('blocked_invalid_hire_date','blocked_no_official_source')) AS critical, "
+        "  COUNT(*) FILTER (WHERE anchor_confidence = 'medium' AND acquisition_type != 'fleet_migration' AND payment_anchor_status != 'blocked_missing_official_anchor') AS warning, "
+        "  COUNT(*) FILTER (WHERE anchor_review_status = 'pending_review') AS pending_review, "
+        "  COUNT(*) FILTER (WHERE anchor_review_status = 'requires_supervisor_review') AS supervisor_review, "
+        "  COUNT(*) FILTER (WHERE payment_status = 'paid' OR already_paid = true) AS paid, "
+        "  COUNT(*) FILTER (WHERE blocked_reason ILIKE '%sin scout%' OR line_status = 'no_scout') AS no_scout, "
+        "  COUNT(*) FILTER (WHERE acquisition_type = 'cabinet_unknown_no_lca') AS no_lead_date, "
+        "  COUNT(*) FILTER (WHERE attribution_source = 'observed') AS duplicates, "
+        "  COUNT(*) FILTER (WHERE payment_anchor_status = 'approved_manual_override') AS approved_manual, "
+        "  COUNT(*) FILTER (WHERE line_status = 'payable') AS payable, "
+        "  COUNT(*) FILTER (WHERE payment_status = 'blocked') AS blocked "
+        "FROM scout_liq_cutoff_driver_lines WHERE cutoff_run_id = :cid"
+    ), {"cid": cut_id}).fetchone()
+
+    return {
+        "cutoff_run_id": cut_id,
+        "total": row[0] or 0,
+        "critical": row[1] or 0,
+        "warning": row[2] or 0,
+        "pending_review": row[3] or 0,
+        "supervisor_review": row[4] or 0,
+        "paid": row[5] or 0,
+        "no_scout": row[6] or 0,
+        "no_lead_date": row[7] or 0,
+        "duplicates": row[8] or 0,
+        "approved_manual": row[9] or 0,
+        "payable": row[10] or 0,
+        "blocked": row[11] or 0,
+        "_timing_ms": round((time.perf_counter() - t0) * 1000),
+    }
+
+
 # ═══════════════════════════════════════════════════════════
 # HEALTH & FRESHNESS — Salud de datos operativos
 # ═══════════════════════════════════════════════════════════
@@ -3753,9 +3952,10 @@ def acquisition_anchor_refresh_preview(
     from app.services.acquisition_anchor_service import (
         resolve_acquisition_anchor, _batch_load_drivers, _batch_match_leads,
     )
+    from app.services.lead_created_at_resolver import resolve_lead_created_at
 
     cols = ["driver_id", "driver_nombre", "driver_apellido", "driver_placa",
-            "hire_date", "lead_created_at", "created_at", "origen"]
+            "hire_date", "lead_created_at_cabinet", "lead_created_at_fleet", "created_at", "origen"]
     rows = db.execute(text(f"""
         SELECT {', '.join(cols)} FROM module_ct_cabinet_drivers
     """)).fetchall()
@@ -3765,8 +3965,13 @@ def acquisition_anchor_refresh_preview(
 
     cabinet_without_lca = [
         {"driver_id": r[0], "driver_nombre": r[1], "driver_apellido": r[2],
-         "driver_placa": r[3], "origen": r[7]}
-        for r in rows if (r[7] or "").lower() == "cabinet" and not r[5]
+         "driver_placa": r[3], "origen": r[8],
+         "lead_created_at_cabinet": r[5], "lead_created_at_fleet": r[6]}
+        for r in rows
+        if (r[8] or "").lower() == "cabinet"
+        and not resolve_lead_created_at({
+            "origen": r[8], "lead_created_at_cabinet": r[5], "lead_created_at_fleet": r[6],
+        }).get("lead_created_at_resolved")
     ]
     leads_map = _batch_match_leads(db, cabinet_without_lca)
 
@@ -3901,6 +4106,82 @@ def anchor_review_bulk(body: BulkReviewRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ── Operation Action Layer (Fase 3) ──
+
+from app.services.operation_action_service import (
+    perform_line_action, bulk_perform_line_action, get_line_audit_trail,
+    get_cutoff_audit_summary,
+)
+from pydantic import BaseModel as PydanticBaseModel
+
+
+class LineActionRequest(PydanticBaseModel):
+    action: str
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+    notes: Optional[str] = None
+    override_reason: Optional[str] = None
+
+
+class BulkLineActionRequest(PydanticBaseModel):
+    line_ids: List[int]
+    action: str
+    actor: Optional[str] = None
+    reason: Optional[str] = None
+    notes: Optional[str] = None
+    override_reason: Optional[str] = None
+
+
+@router.post("/lines/{line_id}/action")
+def line_action(line_id: int, body: LineActionRequest, db: Session = Depends(get_db)):
+    """Ejecuta una accion operacional sobre una linea (approve, block, manual_review, mark_paid, unblock)."""
+    try:
+        result = perform_line_action(
+            db, line_id=line_id, action=body.action,
+            actor=body.actor, reason=body.reason, notes=body.notes,
+            override_reason=body.override_reason,
+        )
+        if result.get("status") == "blocked":
+            raise HTTPException(status_code=409, detail=result.get("message"))
+        if result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=result.get("message"))
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/lines/bulk-action")
+def lines_bulk_action(body: BulkLineActionRequest, db: Session = Depends(get_db)):
+    """Accion masiva sobre lineas (max 500)."""
+    try:
+        result = bulk_perform_line_action(
+            db, line_ids=body.line_ids, action=body.action,
+            actor=body.actor, reason=body.reason, notes=body.notes,
+            override_reason=body.override_reason,
+        )
+        if result.get("status") == "error":
+            raise HTTPException(status_code=400, detail=result.get("message"))
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/lines/{line_id}/audit")
+def line_audit(line_id: int, db: Session = Depends(get_db)):
+    """Obtiene el audit trail de una linea."""
+    return get_line_audit_trail(db, line_id)
+
+
+@router.get("/cutoffs/{cutoff_id}/audit-summary")
+def cutoff_audit_summary(cutoff_id: int, db: Session = Depends(get_db)):
+    """Resumen de auditoria operacional por cutoff."""
+    return get_cutoff_audit_summary(db, cutoff_id)
+
+
 # ── Cutoff Freeze & Snapshot (Fase 2D) ──
 
 from app.services.cutoff_engine import freeze_cutoff, get_snapshot_status
@@ -3943,4 +4224,47 @@ def ux_feedback(
     db.add(fb)
     db.flush()
     return {"id": fb.id, "status": "recorded"}
+
+
+# ── Pilot Analytics (Fase MVP Hardening) ─────────────────────────────
+
+@router.get("/pilot/analytics")
+def pilot_analytics(db: Session = Depends(get_db)):
+    """Metricas simples para monitoreo del piloto."""
+    t0 = time.perf_counter()
+    ops = db.execute(text(
+        "SELECT action, COUNT(*) FROM scout_liq_operation_audit "
+        "WHERE created_at > NOW() - INTERVAL '30 days' "
+        "GROUP BY action ORDER BY COUNT(*) DESC"
+    )).fetchall()
+
+    overrides = db.execute(text(
+        "SELECT COUNT(*) FROM scout_liq_operation_audit "
+        "WHERE override_reason IS NOT NULL"
+    )).scalar() or 0
+
+    lines_active = db.execute(text(
+        "SELECT COUNT(*) FROM scout_liq_cutoff_driver_lines "
+        "WHERE cutoff_run_id = (SELECT id FROM scout_liq_cutoff_runs ORDER BY created_at DESC LIMIT 1)"
+    )).scalar() or 0
+
+    cutoffs = db.execute(text(
+        "SELECT status, COUNT(*) FROM scout_liq_cutoff_runs GROUP BY status"
+    )).fetchall()
+
+    health = db.execute(text(
+        "SELECT global_status, score FROM scout_liq_health_score "
+        "ORDER BY created_at DESC LIMIT 1"
+    )).fetchone()
+
+    return {
+        "pilot_metrics": {
+            "actions_30d": [{"action": r[0], "count": r[1]} for r in ops],
+            "total_overrides": overrides,
+            "active_lines": lines_active,
+            "cutoffs_by_status": [{"status": r[0], "count": r[1]} for r in cutoffs],
+        },
+        "health": {"status": health[0] if health else None, "score": health[1] if health else None},
+        "_timing_ms": round((time.perf_counter() - t0) * 1000),
+    }
 

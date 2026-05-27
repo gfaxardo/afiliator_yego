@@ -1383,8 +1383,8 @@ export default function CentroCargaView() {
               onChange={(e) => setReconFilters({ ...reconFilters, scheme_type: e.target.value })}
               className="border border-gray-300 rounded px-2 py-1 text-xs bg-white">
               <option value="">Todos</option>
-              <option value="cabinet">Cabinet</option>
-              <option value="fleet">Fleet</option>
+              <option value="cabinet">Adquisicion</option>
+              <option value="fleet">Flota</option>
             </select>
           </div>
 

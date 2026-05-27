@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.config import settings
+from app.services.lead_created_at_resolver import resolve_lead_created_at
 
 _logger = logging.getLogger("acquisition_anchor")
 
@@ -65,8 +66,10 @@ def resolve_acquisition_anchor(
     origen = (row.get("origen") or "").strip().lower()
     driver_id = row.get("driver_id")
     hire_date_raw = row.get("hire_date")
-    lead_created_at_raw = row.get("lead_created_at")
     created_at_raw = row.get("created_at")
+
+    lca = resolve_lead_created_at(row)
+    lead_created_at_raw = lca["lead_created_at_resolved"]
 
     cabinet_hire_date = _safe_date(hire_date_raw)
     cabinet_lead_created_at = _safe_date(lead_created_at_raw)
@@ -137,6 +140,10 @@ def resolve_acquisition_anchor(
         "cabinet_hire_date": str(cabinet_hire_date) if cabinet_hire_date else None,
         "drivers_hire_date": str(drivers_hire_date) if drivers_hire_date else None,
         "leads_lead_created_at": str(leads_lead_created_at) if leads_lead_created_at else None,
+        "lead_created_at_resolved": lca["lead_created_at_resolved"],
+        "lead_created_at_source": lca["lead_created_at_source"],
+        "lead_created_at_status": lca["lead_created_at_status"],
+        "lead_created_at_warning": lca["lead_created_at_warning"],
     }
 
 
@@ -452,29 +459,29 @@ def get_acquisition_anchor_summary(db: Session) -> Dict[str, Any]:
     # Load all cabinet drivers
     all_rows = db.execute(text(f"""
         SELECT driver_id, driver_nombre, driver_apellido, driver_placa,
-               driver_phone, hire_date, lead_created_at, created_at,
+               driver_phone, hire_date, lead_created_at_cabinet, lead_created_at_fleet, created_at,
                origen, status, segment, stage, license
         FROM {CABINET_TABLE}
     """)).fetchall()
 
     columns = [
         "driver_id", "driver_nombre", "driver_apellido", "driver_placa",
-        "driver_phone", "hire_date", "lead_created_at", "created_at",
+        "driver_phone", "hire_date", "lead_created_at_cabinet", "lead_created_at_fleet", "created_at",
         "origen", "status", "segment", "stage", "license",
     ]
     rows = [dict(zip(columns, r)) for r in all_rows]
 
-    # Split by origin
     cabinet_rows = [r for r in rows if (r.get("origen") or "").strip().lower() == "cabinet"]
     fleet_rows = [r for r in rows if (r.get("origen") or "").strip().lower() == "fleet"]
     other_rows = [r for r in rows if (r.get("origen") or "").strip().lower() not in ("cabinet", "fleet")]
 
-    # Load drivers data for cabinet rows (all 1219 are in drivers)
     all_driver_ids = [r["driver_id"] for r in rows]
     drivers_map = _batch_load_drivers(db, all_driver_ids)
 
-    # Match leads for cabinet rows without LCA
-    cabinet_without_lca = [r for r in cabinet_rows if not r.get("lead_created_at") or not str(r.get("lead_created_at", "")).strip()]
+    cabinet_without_lca = [
+        r for r in cabinet_rows
+        if not resolve_lead_created_at(r).get("lead_created_at_resolved")
+    ]
     leads_map = _batch_match_leads(db, cabinet_without_lca)
 
     # Resolve anchors
@@ -569,7 +576,7 @@ def get_acquisition_anchor_samples(
 
     all_rows = db.execute(text(f"""
         SELECT driver_id, driver_nombre, driver_apellido, driver_placa,
-               driver_phone, hire_date, lead_created_at, created_at,
+               driver_phone, hire_date, lead_created_at_cabinet, lead_created_at_fleet, created_at,
                origen, status, segment, stage, license
         FROM {CABINET_TABLE}
         WHERE {where}
@@ -579,7 +586,7 @@ def get_acquisition_anchor_samples(
 
     columns = [
         "driver_id", "driver_nombre", "driver_apellido", "driver_placa",
-        "driver_phone", "hire_date", "lead_created_at", "created_at",
+        "driver_phone", "hire_date", "lead_created_at_cabinet", "lead_created_at_fleet", "created_at",
         "origen", "status", "segment", "stage", "license",
     ]
     rows_list = [dict(zip(columns, r)) for r in all_rows]
@@ -589,7 +596,7 @@ def get_acquisition_anchor_samples(
     cabinet_without_lca = [
         r for r in rows_list
         if (r.get("origen") or "").lower() == "cabinet"
-        and not r.get("lead_created_at")
+        and not resolve_lead_created_at(r).get("lead_created_at_resolved")
     ]
     leads_map = _batch_match_leads(db, cabinet_without_lca)
 

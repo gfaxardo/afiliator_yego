@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     SOURCE_TABLE: str = "module_ct_cabinet_drivers"
     SOURCE_SCHEMA: str = "public"
 
+    LOG_LEVEL: str = "INFO"
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.lower() in ("prod", "production")
+
+    @property
+    def show_debug_info(self) -> bool:
+        return self.ENVIRONMENT.lower() in ("dev", "development", "staging")
+
     model_config = {
         "env_file": os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"),
         "case_sensitive": False,
