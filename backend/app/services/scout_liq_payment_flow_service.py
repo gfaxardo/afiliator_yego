@@ -413,7 +413,8 @@ def get_cutoff_report(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     config = json.loads(run.config_snapshot) if run.config_snapshot else {}
 
     summaries = get_cutoff_summary(db, cutoff_run_id)
-    lines = get_cutoff_lines(db, cutoff_run_id)
+    lines_result = get_cutoff_lines(db, cutoff_run_id)
+    lines = lines_result.get("lines", []) if isinstance(lines_result, dict) else (lines_result or [])
 
     total_calculated = sum(s["amount_calculated"] for s in summaries)
     total_approved = sum(s.get("amount_approved", 0) for s in summaries)
