@@ -1,0 +1,18 @@
+[Unit]
+Description=Scout Liq Health Recompute — recalcula derivados de salud
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=REPLACE_WITH_DEPLOY_USER
+WorkingDirectory=REPLACE_WITH_PROJECT_PATH/backend
+ExecStart=REPLACE_WITH_PYTHON_PATH scripts/run_scout_liq_health_recompute.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=scout-liq-health-recompute
+
+# No reiniciar automaticamente — es oneshot
+Restart=no
+
+# Opcional: variables de entorno si no usa .env
+# Environment=DATABASE_URL=postgresql://user:pass@host:5432/db

@@ -7,6 +7,8 @@ import {
   getPaymentExportCsvUrl, getPaymentExportXlsxUrl,
   getPaidHistory, getCutoffExportFinancialUrl,
   getOperationFilters, listPaymentSchemes,
+  getOperationalReadiness,
+  type OperationalReadiness,
 } from '../../api/scoutLiq'
 
 const GREEN  = { bg: 'bg-emerald-50', border: 'border-emerald-300', text: 'text-emerald-700', badge: 'bg-emerald-100 text-emerald-800' }
@@ -73,6 +75,8 @@ export default function LiquidacionesView() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
+  const [readiness, setReadiness] = useState<OperationalReadiness | null>(null)
+
   // Confirmation modals
   const [showApproveConfirm, setShowApproveConfirm] = useState(false)
   const [showPayConfirm, setShowPayConfirm] = useState(false)
@@ -90,11 +94,13 @@ export default function LiquidacionesView() {
     let cancelled = false
     Promise.all([
       listPaymentSchemes(), listCutoffs(), getOperationFilters().catch(() => null),
-    ]).then(([s, c, f]) => {
+      getOperationalReadiness().catch(() => null),
+    ]).then(([s, c, f, r]) => {
       if (cancelled) return
       setSchemes(s)
       setCutoffs(c)
       if (f) setCohortWeek(f.current_iso_week || '')
+      if (r) setReadiness(r)
     }).catch((err: any) => { if (!cancelled) setError(err?.response?.data?.detail || err.message) })
       .finally(() => { if (!cancelled) setLoadingInitial(false) })
     return () => { cancelled = true }
@@ -317,6 +323,41 @@ export default function LiquidacionesView() {
         </div>
       </div>
 
+      {/* ── Health Readiness Banner ── */}
+      {readiness && !readiness.can_approve_payments && (
+        <div className="mb-3 px-4 py-3 bg-red-50 border-2 border-red-300 rounded-lg">
+          <div className="flex items-start gap-2">
+            <span className="text-red-500 text-lg shrink-0 mt-0.5">{'\u26A0'}</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-bold text-red-800">
+                Pagos bloqueados por salud operativa
+              </div>
+              <div className="text-xs text-red-700 mt-1">
+                Puedes revisar y calcular preview, pero no aprobar ni marcar pagado hasta resolver los bloqueos.
+              </div>
+              {readiness.blocking_domains.length > 0 && (
+                <div className="text-[10px] text-red-600 mt-1">
+                  Dominios bloqueantes: {readiness.blocking_domains.join(', ')}
+                </div>
+              )}
+              {readiness.next_actions.length > 0 && (
+                <div className="mt-1.5 space-y-0.5">
+                  {readiness.next_actions.filter(a => a.blocking).slice(0, 3).map((a, i) => (
+                    <div key={i} className="text-[10px] text-red-600 flex items-start gap-1">
+                      <span className="font-semibold shrink-0">{a.owner}:</span>
+                      <span>{a.action}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <a href="/scout-liq/salud" className="inline-block mt-2 text-[10px] text-indigo-600 underline font-medium">
+                Ir a Salud de Data {'\u2192'}
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Crear corte ── */}
       <div className="bg-white border border-gray-200 rounded-lg p-4 mb-3">
         <div className="flex items-center gap-4 flex-wrap">
@@ -423,8 +464,15 @@ export default function LiquidacionesView() {
                   </button>
                 )}
                 {selectedCutoff.status === 'reviewed' && (
-                  <button onClick={() => setShowApproveConfirm(true)}
-                    className="px-3 py-1 bg-emerald-600 text-white rounded text-[10px] font-semibold hover:bg-emerald-700">
+                  <button
+                    onClick={() => setShowApproveConfirm(true)}
+                    disabled={readiness ? !readiness.can_approve_payments : false}
+                    title={readiness && !readiness.can_approve_payments ? 'Pagos bloqueados por salud operativa. Revisa /scout-liq/salud' : 'Aprobar corte'}
+                    className={`px-3 py-1 text-white rounded text-[10px] font-semibold ${
+                      readiness && !readiness.can_approve_payments
+                        ? 'bg-gray-300 cursor-not-allowed'
+                        : 'bg-emerald-600 hover:bg-emerald-700'
+                    }`}>
                     Aprobar
                   </button>
                 )}
@@ -434,288 +482,16 @@ export default function LiquidacionesView() {
                       className="px-2 py-1 border border-gray-200 text-gray-600 rounded text-[10px] hover:bg-gray-50">CSV</button>
                     <button onClick={() => openExport(getCutoffExportFinancialUrl)}
                       className="px-2 py-1 border border-gray-200 text-gray-600 rounded text-[10px] hover:bg-gray-50">Financiero</button>
-                    <button onClick={() => setShowPayConfirm(true)}
-                      className="px-3 py-1 bg-teal-600 text-white rounded text-[10px] font-semibold hover:bg-teal-700">
+                    <button
+                      onClick={() => setShowPayConfirm(true)}
+                      disabled={readiness ? !readiness.can_approve_payments : false}
+                      title={readiness && !readiness.can_approve_payments ? 'Pagos bloqueados por salud operativa' : 'Marcar como pagado'}
+                      className={`px-3 py-1 text-white rounded text-[10px] font-semibold ${
+                        readiness && !readiness.can_approve_payments
+                          ? 'bg-gray-300 cursor-not-allowed'
+                          : 'bg-teal-600 hover:bg-teal-700'
+                      }`}>
                       Marcar pagado
                     </button>
-                  </>
-                )}
-                {(selectedCutoff.status !== 'paid' && selectedCutoff.status !== 'cancelled') && (
-                  <button onClick={handleCancel} disabled={!cancelReason}
-                    className="px-2 py-1 bg-red-50 text-red-600 rounded text-[10px] hover:bg-red-100 disabled:opacity-40"
-                    title="Requiere razon de cancelacion">
-                    Cancelar
-                  </button>
-                )}
-              </div>
-            </div>
-            {selectedCutoff.status !== 'paid' && (
-              <input type="text" value={cancelReason} onChange={e => setCancelReason(e.target.value)}
-                placeholder="Razon de cancelacion (necesaria)"
-                className="mt-2 border rounded px-2 py-1 text-[10px] w-60 text-gray-500" />
-            )}
-          </div>
-
-          {/* Scout summary + blockers */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <div className="lg:col-span-2">
-              {cutoffLoading ? (
-                <div className="space-y-2">{Array.from({length:4}).map((_,i)=><div key={i} className="bg-gray-200 rounded animate-pulse h-10 w-full" />)}</div>
-              ) : cutoffSummaries.length > 0 ? (
-                <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-                  <div className="px-3 py-2 bg-gray-50 border-b text-[11px] font-semibold text-gray-500 uppercase flex justify-between">
-                    <span>Resumen por scout ({cutoffSummaries.length})</span>
-                    <button onClick={() => selectScoutForLines(null)}
-                      className="text-[10px] text-blue-600 hover:text-blue-800 font-normal normal-case">Ver todos los conductores</button>
-                  </div>
-                  <table className="w-full text-[10px]">
-                    <thead>
-                      <tr className="text-left text-[9px] text-gray-400 uppercase bg-gray-50/50 border-b">
-                        <th className="px-2 py-1">Scout</th>
-                        <th className="px-2 py-1 text-center">Afiliados</th>
-                        <th className="px-2 py-1 text-center">5V/7D</th>
-                        <th className="px-2 py-1 text-center">No conv.</th>
-                        <th className="px-2 py-1 text-center">Conv %</th>
-                        <th className="px-2 py-1 text-center">Tier</th>
-                        <th className="px-2 py-1 text-right">Pago x conv</th>
-                        <th className="px-2 py-1 text-right">Total calc.</th>
-                        <th className="px-2 py-1">Estado</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {cutoffSummaries.map((s: any, i: number) => {
-                        const isBlocked = s.status === 'blocked'
-                        return (
-                          <tr key={i}
-                            onClick={() => selectScoutForLines(s.scout_id)}
-                            className="cursor-pointer hover:bg-blue-50/30 transition-colors">
-                            <td className="px-2 py-1.5 font-medium text-gray-800">{s.scout_name}</td>
-                            <td className="px-2 py-1.5 text-center text-gray-600">{s.total_affiliations || s.total_activated || 0}</td>
-                            <td className="px-2 py-1.5 text-center font-semibold text-blue-600">{s.converted_5trips_7d || 0}</td>
-                            <td className="px-2 py-1.5 text-center text-gray-400">{s.not_converted || 0}</td>
-                            <td className="px-2 py-1.5 text-center font-mono font-semibold">{((s.conversion_rate || s.conversion_rate_5v7d || 0) * 100).toFixed(0)}%</td>
-                            <td className="px-2 py-1.5 text-center font-mono text-gray-700">{s.tier_reached != null ? `T${Math.round(s.tier_reached * 100)}` : '—'}</td>
-                            <td className="px-2 py-1.5 text-right font-mono">S/ {Number(s.payment_per_converted_driver || 0).toFixed(0)}</td>
-                            <td className="px-2 py-1.5 text-right font-mono font-semibold">{isBlocked ? '—' : `S/ ${Number(s.amount_calculated || s.total_payable || 0).toLocaleString()}`}</td>
-                            <td className="px-2 py-1.5">
-                              <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold ${isBlocked ? RED.badge : GREEN.badge}`}>
-                                {isBlocked ? 'BLOQUEADO' : 'OK'}
-                              </span>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="bg-white border border-dashed border-gray-300 rounded-lg p-6 text-center text-xs text-gray-400">
-                  {selectedCutoff.status === 'draft' ? 'El corte esta en draft. Recalcula para generar el resumen.' : 'Sin datos de resumen.'}
-                </div>
-              )}
-            </div>
-
-            {/* Blockers panel */}
-            <div>
-              {blockerCounts.length > 0 && (
-                <div className="bg-white border border-gray-200 rounded-lg p-3">
-                  <h4 className="text-[11px] font-semibold text-gray-500 uppercase mb-2">Bloqueos detectados</h4>
-                  <div className="space-y-1">
-                    {blockerCounts.map(([key, v]) => (
-                      <div key={key} className="flex items-center justify-between px-2 py-1 rounded text-[10px]">
-                        <span className={`font-medium ${v.color.split(' ')[0]}`}>{v.label}</span>
-                        <Badge label={String(v.count)} color={v.color.split(' ').slice(1).join(' ')} />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {selectedCutoff && (
-                <div className="bg-white border border-gray-200 rounded-lg p-3 mt-3">
-                  <h4 className="text-[11px] font-semibold text-gray-500 uppercase mb-2">Info del corte</h4>
-                  <div className="space-y-1 text-[10px] text-gray-500">
-                    <div>ID: {selectedCutoff.id}</div>
-                    <div>Base fecha: {selectedCutoff.date_basis || 'acquisition_anchor'}</div>
-                    <div>Origen: {selectedCutoff.origin_filter || 'todos'}</div>
-                    <div>Creado: {selectedCutoff.created_at ? selectedCutoff.created_at.substring(0, 10) : '—'}</div>
-                    {selectedCutoff.approved_at && <div>Aprobado: {selectedCutoff.approved_at.substring(0, 10)}</div>}
-                    {selectedCutoff.paid_at && <div>Pagado: {selectedCutoff.paid_at.substring(0, 10)}</div>}
-                    {selectedCutoff.config_snapshot && (
-                      <details className="mt-1">
-                        <summary className="cursor-pointer text-gray-400 hover:text-gray-600">Ver snapshot config</summary>
-                        <pre className="mt-1 text-[9px] bg-gray-50 p-1 rounded max-h-32 overflow-auto">{typeof selectedCutoff.config_snapshot === 'string' ? selectedCutoff.config_snapshot : JSON.stringify(selectedCutoff.config_snapshot, null, 2)}</pre>
-                      </details>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Driver lines panel */}
-          {showLinesPanel && selectedCutoff && (
-            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-              <div className="px-3 py-2 bg-gray-50 border-b flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-semibold text-gray-500 uppercase">
-                  Conductores {linesScoutFilter ? `(scout #${linesScoutFilter})` : ''}
-                </span>
-                <input type="text" value={linesSearch} onChange={e => setLinesSearch(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && loadCutoffLines(linesScoutFilter, linesStatusFilter)}
-                  placeholder="Buscar driver..." className="border rounded px-2 py-1 text-[10px] w-40" />
-                <select value={linesStatusFilter} onChange={e => { setLinesStatusFilter(e.target.value); loadCutoffLines(linesScoutFilter, e.target.value) }}
-                  className="border rounded px-2 py-1 text-[10px]">
-                  <option value="">Todos estados</option>
-                  <option value="payable">Pagables</option>
-                  <option value="paid">Pagados</option>
-                  <option value="blocked_already_paid">Ya pagados</option>
-                  <option value="blocked_min_activated">Min activ.</option>
-                  <option value="blocked_missing_official_anchor">Anchor faltante</option>
-                  <option value="activated_no_tier">No tier</option>
-                  <option value="no_trip">Sin viajes</option>
-                </select>
-                <span className="text-[10px] text-gray-400 ml-auto">{linesTotal > 0 ? `${cutoffLines.length} de ${linesTotal} lineas` : ''}</span>
-                <button onClick={() => setShowLinesPanel(false)} className="text-xs text-gray-400 hover:text-gray-600">&times;</button>
-              </div>
-              {linesLoading ? (
-                <div className="p-4 space-y-2">{Array.from({length:3}).map((_,i)=><div key={i} className="bg-gray-200 rounded animate-pulse h-8 w-full" />)}</div>
-              ) : cutoffLines.length === 0 ? (
-                <div className="p-6 text-center text-xs text-gray-400">Sin lineas para este filtro.</div>
-              ) : (
-                <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                  <table className="w-full text-[10px]">
-                    <thead>
-                      <tr className="text-left text-[9px] text-gray-400 uppercase bg-gray-50/50 border-b sticky top-0">
-                        <th className="px-2 py-1">Driver</th>
-                        <th className="px-2 py-1">Scout</th>
-                        <th className="px-2 py-1">Trips 7D</th>
-                        <th className="px-2 py-1">5V/7D</th>
-                        <th className="px-2 py-1">Estado</th>
-                        <th className="px-2 py-1">Motivo</th>
-                        <th className="px-2 py-1 text-right">Monto</th>
-                        <th className="px-2 py-1">Explicacion</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {cutoffLines.map((l: any, i: number) => (
-                        <tr key={i} className={l.line_status === 'payable' ? 'bg-emerald-50/20' : l.line_status?.startsWith('blocked') ? 'bg-red-50/20' : ''}>
-                          <td className="px-2 py-1.5">
-                            <span className="font-medium text-gray-800">{l.driver_id || '—'}</span>
-                            {l.hire_date && <div className="text-[9px] text-gray-400">{l.hire_date}</div>}
-                          </td>
-                          <td className="px-2 py-1.5 text-gray-600">{l.scout_name || l.scout_id || '—'}</td>
-                          <td className="px-2 py-1.5 text-center font-mono">{l.trips_7d ?? l.trips_0_7_count ?? '—'}</td>
-                          <td className="px-2 py-1.5 text-center font-mono">{l.is_converted_5trips_7d || l.converted_5v7d ? 'Si' : '—'}</td>
-                          <td className="px-2 py-1.5">
-                            <span className={`text-[9px] font-semibold ${LINE_STATUS_COLORS[l.line_status || l.payment_status] || 'text-gray-500'}`}>
-                              {l.line_status || l.payment_status || '—'}
-                            </span>
-                          </td>
-                          <td className="px-2 py-1.5 text-[9px] text-gray-500">
-                            {l.blocked_reason === 'already_paid' ? 'Ya pagado' :
-                             l.blocked_reason === 'blocked_min_activated' ? 'Min activ.' :
-                             l.blocked_reason === 'blocked_missing_official_anchor' ? 'Anchor faltante' :
-                             l.already_paid ? 'Ya pagado' : l.blocked_reason || '—'}
-                          </td>
-                          <td className="px-2 py-1.5 text-right font-mono font-semibold">
-                            {l.calculated_amount ? `S/ ${Number(l.calculated_amount).toFixed(0)}` : '—'}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            {l.payment_formula_explanation ? (
-                              <span className="text-[9px] text-gray-500 max-w-[200px] truncate block" title={l.payment_formula_explanation}>
-                                {l.payment_formula_explanation.substring(0, 60)}{l.payment_formula_explanation.length > 60 ? '...' : ''}
-                              </span>
-                            ) : (
-                              <span className="text-[9px] text-gray-300">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── Historial ── */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 mt-3">
-        <h3 className="text-xs font-semibold text-gray-500 uppercase mb-2">Historial de pagos</h3>
-        {paidHistory.length === 0 && !loadingHistory ? (
-          <p className="text-xs text-gray-400 py-2">No hay pagos registrados.</p>
-        ) : (
-          <div className="space-y-0.5 max-h-60 overflow-y-auto">
-            {paidHistory.map((item: any, i: number) => (
-              <div key={i} className="flex justify-between items-center text-[10px] border-b border-gray-50 py-1">
-                <div className="flex-1 min-w-0">
-                  <span className="font-medium text-gray-700">{item.scout_name_raw || 'Scout #' + item.scout_id}</span>
-                  <span className="text-gray-400 ml-2">Driver: {item.driver_id || item.driver_license_raw || '—'}</span>
-                  {item.cutoff_name && <span className="text-gray-300 ml-1">· {item.cutoff_name}</span>}
-                  {item.import_source && <span className={`ml-1 px-1 py-0.5 rounded text-[8px] ${item.import_source === 'cutoff_engine' ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-500'}`}>{item.import_source}</span>}
-                </div>
-                <span className="font-semibold text-emerald-700 ml-2 flex-shrink-0">S/ {item.amount_paid?.toLocaleString()} {item.currency}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {paidHistory.length >= 20 && (
-          <button onClick={() => loadHistory(historyPage + 1)} disabled={loadingHistory}
-            className="mt-2 px-3 py-1 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200 disabled:opacity-50">
-            {loadingHistory ? 'Cargando...' : 'Cargar mas'}
-          </button>
-        )}
-        <a href="/scout-liq/paid-history" className="inline-block mt-2 px-3 py-1 bg-gray-100 text-gray-600 rounded text-xs hover:bg-gray-200">
-          Historial completo
-        </a>
-      </div>
-
-      {/* ── Approve confirmation modal ── */}
-      {showApproveConfirm && selectedCutoff && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowApproveConfirm(false)} />
-          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-5">
-            <h4 className="text-sm font-bold text-gray-800 mb-3">Confirmar aprobacion</h4>
-            <div className="text-xs text-gray-600 space-y-2 mb-4">
-              <p>Corte: <strong>{selectedCutoff.cutoff_name}</strong></p>
-              <p>Scouts en corte: {cutoffSummaries.length}</p>
-              <p>Lineas totales: {linesTotal}</p>
-              <p className="text-amber-600 font-medium">Al aprobar se congelan los montos aprobados y el snapshot de reglas usado. Esta accion no se puede deshacer facilmente.</p>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setShowApproveConfirm(false)}
-                className="flex-1 px-3 py-2 text-xs text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200">Cancelar</button>
-              <button onClick={handleApprove} disabled={approving}
-                className="flex-1 px-3 py-2 text-xs bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 font-semibold disabled:opacity-50">
-                {approving ? 'Aprobando...' : 'Confirmar aprobacion'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Pay confirmation modal ── */}
-      {showPayConfirm && selectedCutoff && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowPayConfirm(false)} />
-          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 p-5">
-            <h4 className="text-sm font-bold text-gray-800 mb-3">Confirmar pago</h4>
-            <div className="text-xs text-gray-600 space-y-2 mb-4">
-              <p>Corte: <strong>{selectedCutoff.cutoff_name}</strong></p>
-              <p className="text-red-600 font-medium">Esta accion registrara el historial de pago y bloqueara estos drivers para futuros cortes. Es irreversible.</p>
-              <p className="text-gray-400">Se crearan registros en paid_history con blocks_future_payment=true para cada driver pagable.</p>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setShowPayConfirm(false)}
-                className="flex-1 px-3 py-2 text-xs text-gray-500 hover:text-gray-700 rounded-lg border border-gray-200">Cancelar</button>
-              <button onClick={handleMarkPaid} disabled={paying}
-                className="flex-1 px-3 py-2 text-xs bg-teal-600 text-white rounded-lg hover:bg-teal-700 font-semibold disabled:opacity-50">
-                {paying ? 'Pagando...' : 'Confirmar pago'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
+                  </>)
+                }

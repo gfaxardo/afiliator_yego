@@ -171,6 +171,18 @@ from app.services.scout_liq_health_registry_service import (
     compute_health_score,
     compute_health_score_lite,
 )
+from app.services.scout_liq_health_pipeline import (
+    get_pipeline_summary,
+    recompute_derived,
+    get_alerts_detail,
+    get_unassigned_drivers_detail,
+    get_blocked_cohorts_detail,
+    export_unassigned_drivers_csv,
+    export_blocked_cohorts_csv,
+    export_alerts_csv,
+    get_operational_readiness,
+    _compute_operational_readiness,
+)
 from app.services.scout_liq_payment_flow_service import (
     create_payment_draft,
     recalculate_draft,
@@ -241,9 +253,38 @@ from app.schemas.scout_liq import (
     IntegrityMetricsResponse,
     ReconciliationFreshnessResponse,
     OperationalGapsDiagnosticResponse,
+    PipelineSummaryResponse,
+    RecomputeDerivedResponse,
 )
 
 router = APIRouter(prefix="/scout-liq", tags=["scout-liq"])
+
+
+def _guard_liquidation_approval(db: Session) -> None:
+    """Bloquea aprobacion de pagos si el health readiness no lo permite."""
+    try:
+        readiness = get_operational_readiness(db)
+    except Exception as e:
+        _logger.error(f"[_guard_liquidation_approval] Error al evaluar readiness: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "health_readiness_unavailable",
+                "message": "No se pudo evaluar el health readiness para aprobar pagos.",
+                "error": str(e),
+            },
+        )
+
+    if not readiness.get("can_approve_payments"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "health_readiness_blocks_payment_approval",
+                "message": "No se puede aprobar pagos porque el health operativo esta bloqueado.",
+                "blocking_domains": readiness.get("blocking_domains", []),
+                "next_actions": readiness.get("next_actions", []),
+            },
+        )
 
 
 def _parse_snapshot(config_snapshot: str | None) -> dict:
@@ -826,6 +867,15 @@ def create_cutoff_from_cohort_endpoint(
             force_override=force_override,
             date_basis=date_basis,
         )
+        try:
+            readiness = get_operational_readiness(db)
+            if not readiness.get("can_approve_payments"):
+                result["approval_blocked"] = True
+                result["approval_block_reason"] = "health_readiness_blocks_payment_approval"
+                result["blocking_domains"] = readiness.get("blocking_domains", [])
+                result["next_actions"] = readiness.get("next_actions", [])
+        except Exception:
+            result["approval_blocked"] = None
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1011,6 +1061,7 @@ def approve_cutoff_endpoint(
     approved_by: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    _guard_liquidation_approval(db)
     try:
         return approve_cutoff(db, cutoff_id, approved_by)
     except ValueError as e:
@@ -1019,6 +1070,7 @@ def approve_cutoff_endpoint(
 
 @router.post("/cutoffs/{cutoff_id}/mark-paid")
 def mark_paid_endpoint(cutoff_id: int, db: Session = Depends(get_db)):
+    _guard_liquidation_approval(db)
     try:
         return mark_cutoff_paid(db, cutoff_id)
     except ValueError as e:
@@ -1172,6 +1224,7 @@ def approve_cutoff_flow_endpoint(
     approved_by: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    _guard_liquidation_approval(db)
     try:
         return approve_cutoff_flow(db, cutoff_run_id, approved_by)
     except ValueError as e:
@@ -1184,6 +1237,7 @@ def mark_paid_flow_endpoint(
     paid_by: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
+    _guard_liquidation_approval(db)
     try:
         return mark_cutoff_paid_flow(db, cutoff_run_id, paid_by)
     except ValueError as e:
@@ -3112,14 +3166,17 @@ def dashboard_operational_health(db: Session = Depends(get_db)):
 @router.get("/health/summary")
 def health_summary(
     db: Session = Depends(get_db),
-    mode: Optional[str] = Query(None, description="lite (default, rapido) | full (incluye detalle cohorts)"),
+    mode: Optional[str] = Query(None, description="lite | full | pipeline (default: pipeline con auditoria completa)"),
 ):
-    """Resumen ejecutivo de salud de datos. Default: lite (sin cohorts pesadas, sin trips)."""
+    """Resumen ejecutivo de salud de datos con auditoria de pipeline completa."""
     try:
         if mode == "full":
-            _logger.info("[GET /health/summary] mode=full")
+            _logger.info("[GET /health/summary] mode=full (legacy)")
             return get_health_summary(db)
-        return get_health_summary_lite(db)
+        elif mode == "lite":
+            return get_health_summary_lite(db)
+        else:
+            return get_pipeline_summary(db)
     except Exception as e:
         _logger.error(f"[GET /health/summary] mode={mode}: {e}\n{traceback.format_exc()}")
         return {
@@ -3278,6 +3335,117 @@ def health_registry_refresh(db: Session = Depends(get_db)):
             "error_code": "REFRESH_CYCLE_FAILED",
             "message": str(e),
         }
+
+
+@router.post("/health/recompute-derived")
+def health_recompute_derived(
+    db: Session = Depends(get_db),
+    triggered_by: Optional[str] = Query("manual", description="manual | system"),
+):
+    """Recalcula todos los derivados del pipeline de salud:
+    fuente → cobertura → cohortes → eventos → unmatched.
+    Registra ejecucion en scout_liq_job_runs. NO modifica fuente operativa."""
+    try:
+        result = recompute_derived(db, triggered_by=triggered_by or "manual")
+        _logger.info(
+            f"[POST /health/recompute-derived] status={result.get('status')} "
+            f"duration_ms={result.get('duration_ms')} steps={len(result.get('steps', []))}"
+        )
+        return result
+    except Exception as e:
+        _logger.error(f"[POST /health/recompute-derived] {e}\n{traceback.format_exc()}")
+        return {
+            "status": "failed",
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": datetime.utcnow().isoformat(),
+            "duration_ms": 0,
+            "steps": [],
+            "alerts": [],
+            "health_summary": {},
+            "error_code": "RECOMPUTE_FAILED",
+            "message": str(e),
+        }
+
+
+@router.get("/health/alerts/detail")
+def health_alerts_detail(db: Session = Depends(get_db)):
+    """Detalle de todas las alertas con evidencia, clasificacion y accion."""
+    try:
+        result = get_alerts_detail(db)
+        _logger.info(f"[GET /health/alerts/detail] total={result.get('total_alerts', 0)} blocking={result.get('blocking_count', 0)}")
+        return result
+    except Exception as e:
+        _logger.error(f"[GET /health/alerts/detail] {e}\n{traceback.format_exc()}")
+        return {"alerts": [], "total_alerts": 0, "error_code": "ALERTS_DETAIL_FAILED", "message": str(e)}
+
+
+@router.get("/health/unassigned-drivers")
+def health_unassigned_drivers(
+    limit: int = Query(50, ge=1, le=200, description="Max drivers a retornar"),
+    offset: int = Query(0, ge=0, description="Offset para paginacion"),
+    db: Session = Depends(get_db),
+):
+    """Lista de drivers sin scout con detalle y accion sugerida."""
+    try:
+        return get_unassigned_drivers_detail(db, limit=limit, offset=offset)
+    except Exception as e:
+        _logger.error(f"[GET /health/unassigned-drivers] limit={limit} offset={offset}: {e}\n{traceback.format_exc()}")
+        return {"total_unassigned": 0, "items": [], "error_code": "UNASSIGNED_FAILED", "message": str(e)}
+
+
+@router.get("/health/cohorts-blocked")
+def health_cohorts_blocked(db: Session = Depends(get_db)):
+    """Lista de cohortes bloqueadas o con warning: maduras sin cutoff, sin scout, etc."""
+    try:
+        return get_blocked_cohorts_detail(db)
+    except Exception as e:
+        _logger.error(f"[GET /health/cohorts-blocked] {e}\n{traceback.format_exc()}")
+        return {"cohorts": [], "total_blocked_or_warning": 0, "error_code": "COHORTS_BLOCKED_FAILED", "message": str(e)}
+
+
+@router.get("/health/unassigned-drivers.csv")
+def health_unassigned_drivers_csv(db: Session = Depends(get_db)):
+    """Exporta CSV con BOM UTF-8 de drivers sin scout."""
+    try:
+        csv_content = export_unassigned_drivers_csv(db)
+        return Response(
+            content=csv_content.encode('utf-8'),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=drivers_sin_scout.csv"},
+        )
+    except Exception as e:
+        _logger.error(f"[GET /health/unassigned-drivers.csv] {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/health/cohorts-blocked.csv")
+def health_cohorts_blocked_csv(db: Session = Depends(get_db)):
+    """Exporta CSV con BOM UTF-8 de cohortes bloqueadas."""
+    try:
+        csv_content = export_blocked_cohorts_csv(db)
+        return Response(
+            content=csv_content.encode('utf-8'),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=cohortes_bloqueadas.csv"},
+        )
+    except Exception as e:
+        _logger.error(f"[GET /health/cohorts-blocked.csv] {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/health/alerts.csv")
+def health_alerts_csv(db: Session = Depends(get_db)):
+    """Exporta CSV con BOM UTF-8 de alertas activas."""
+    try:
+        csv_content = export_alerts_csv(db)
+        return Response(
+            content=csv_content.encode('utf-8'),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": "attachment; filename=alertas_salud.csv"},
+        )
+    except Exception as e:
+        _logger.error(f"[GET /health/alerts.csv] {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════════

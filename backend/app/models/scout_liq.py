@@ -835,6 +835,25 @@ class UxFeedback(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class JobRun(Base):
+    __tablename__ = "scout_liq_job_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_name = Column(String(255), nullable=False, index=True)
+    job_type = Column(String(50), nullable=False, default="health_diagnostic", server_default=text("'health_diagnostic'"))
+    status = Column(String(20), nullable=False, default="running", server_default=text("'running'"))
+    started_at = Column(DateTime, server_default=func.now())
+    finished_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    triggered_by = Column(String(50), nullable=False, default="system", server_default=text("'system'"))
+    steps_executed = Column(Integer, nullable=True)
+    steps_succeeded = Column(Integer, nullable=True)
+    steps_failed = Column(Integer, nullable=True)
+    details_json = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class OperationAudit(Base):
     """Audit trail for operational line actions (approve, block, review, mark-paid)."""
     __tablename__ = "scout_liq_operation_audit"

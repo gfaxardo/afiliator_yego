@@ -1721,6 +1721,303 @@ export async function refreshHealthRegistry(): Promise<RegistryRefreshResponse> 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// HEALTH PIPELINE — Auditoria completa de frescura y derivados
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface PipelineSourceInfo {
+  status: string
+  max_hire_date: string | null
+  max_anchor_date: string | null
+  anchor_date_source: string | null
+  lag_days: number | null
+  rows_last_1d: number
+  rows_last_3d: number
+  rows_last_7d: number
+  total_rows: number
+  message: string
+  recommended_action: string | null
+  anchor_warnings: string[] | null
+  last_source_update: string | null
+  cabinet_leads_last_1d: number | null
+  fleet_leads_last_1d: number | null
+}
+
+export interface PipelineDerivedInfo {
+  status: string
+  last_recomputed_at: string | null
+  recompute_lag_days: number | null
+  stale_dependencies: string[]
+  message: string
+  recommended_action: string | null
+}
+
+export interface PipelineMatchingInfo {
+  status: string
+  unmatched_count: number
+  total_source_drivers: number
+  assigned_count: number
+  assignment_coverage_pct: number
+  unassigned_sample: {
+    driver_id: string
+    hire_date: string
+    origen: string
+    lead_created_at_cabinet: string | null
+    lead_created_at_fleet: string | null
+    reason: string
+  }[]
+  message: string
+  recommended_action: string | null
+}
+
+export interface PipelineCohortItem {
+  cohort: string
+  cohort_key: string
+  range: string
+  total: number
+  assigned: number
+  unassigned: number
+  active: number
+  converted_5v_7d: number
+  converted_5v_14d: number
+  paid: number
+  is_7d_mature: boolean
+  is_14d_mature: boolean
+  cutoff_exists: boolean
+  cutoff_status: string | null
+  status: string
+  reasons: string[]
+}
+
+export interface PipelineCohortsSummary {
+  global_status: string
+  warning_count: number
+  blocked_count: number
+  total_cohorts: number
+}
+
+export interface PipelineJobRun {
+  job_name: string
+  status: string
+  finished_at: string | null
+  duration_ms: number | null
+  error_message: string | null
+  started_at: string | null
+}
+
+export interface PipelineMissingJob {
+  job_name: string
+  description: string
+  recommended_action: string | null
+}
+
+export interface PipelineJobsInfo {
+  status: string
+  last_successful_runs: PipelineJobRun[]
+  failed_runs: PipelineJobRun[]
+  missing_jobs: PipelineMissingJob[]
+}
+
+export interface PipelineAlert {
+  code: string
+  severity: string
+  message: string
+  root_cause_candidate: string | null
+  recommended_action: string | null
+}
+
+export interface NextAction {
+  owner: string
+  action: string
+  blocking: boolean
+  detail: string
+}
+
+export interface OperationalReadiness {
+  can_create_cutoff: boolean
+  can_calculate_preview: boolean
+  can_approve_payments: boolean
+  can_assign_scouts: boolean
+  blocking_domains: string[]
+  next_actions: NextAction[]
+}
+
+export interface PipelineSummaryResponse {
+  evaluated_at: string
+  overall_status: string
+  closed_day_expected: string | null
+  source_operational: PipelineSourceInfo
+  derived_pipeline: PipelineDerivedInfo
+  matching: PipelineMatchingInfo
+  cohorts: PipelineCohortItem[]
+  cohorts_summary: PipelineCohortsSummary
+  jobs: PipelineJobsInfo
+  alerts: PipelineAlert[]
+  operational_readiness: OperationalReadiness
+}
+
+export interface RecomputeStep {
+  name: string
+  status: string
+  message?: string
+  rows_checked?: number
+  lag_days?: number
+  total?: number
+  assigned?: number
+  coverage_pct?: number
+  cohorts_evaluated?: number
+  warning_count?: number
+  blocked_count?: number
+  registry_entries?: number
+  new_events?: number
+  resolved_events?: number
+  unmatched_count?: number
+  sample_size?: number
+}
+
+export interface RecomputeHealthSummary {
+  overall_status: string | null
+  source_status: string | null
+  matching_status: string | null
+  cohorts_status: string | null
+}
+
+export interface RecomputeDerivedResponse {
+  status: string
+  started_at: string
+  finished_at: string
+  duration_ms: number
+  steps: RecomputeStep[]
+  alerts: PipelineAlert[]
+  health_summary: RecomputeHealthSummary
+}
+
+export async function getHealthPipeline(): Promise<PipelineSummaryResponse> {
+  const { data } = await api.get('/health/summary')
+  return data
+}
+
+export async function recomputeDerived(triggeredBy?: string): Promise<RecomputeDerivedResponse> {
+  const { data } = await api.post('/health/recompute-derived', null, {
+    params: { triggered_by: triggeredBy || 'manual' },
+  })
+  return data
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HEALTH ALERTS DETAIL — Alertas clasificadas con evidencia
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface AlertDetailItem {
+  code: string
+  severity: string
+  category: string
+  message: string
+  root_cause_candidate: string | null
+  impact: string
+  recommended_action: string
+  is_blocking: boolean
+  owner: string
+  evidence: Record<string, any>
+}
+
+export interface AlertsDetailResponse {
+  evaluated_at: string
+  overall_status: string
+  total_alerts: number
+  blocking_count: number
+  alerts: AlertDetailItem[]
+  summary_by_category: Record<string, { count: number; blocking: number }>
+  summary_by_owner: Record<string, { count: number; blocking: number }>
+}
+
+export interface UnassignedDriverItem {
+  driver_id: string
+  hire_date: string | null
+  lead_created_at_cabinet: string | null
+  lead_created_at_fleet: string | null
+  origen: string | null
+  license: string | null
+  source_status: string | null
+  created_at: string | null
+  updated_at: string | null
+  suggested_action: string
+}
+
+export interface UnassignedDriversResponse {
+  total_unassigned: number
+  limit: number
+  offset: number
+  has_more: boolean
+  items: UnassignedDriverItem[]
+}
+
+export interface BlockedCohortItem {
+  cohort: string
+  cohort_key: string
+  range: string
+  is_7d_mature: boolean
+  is_14d_mature: boolean
+  cutoff_exists: boolean
+  cutoff_status: string | null
+  total_drivers: number
+  assigned: number
+  unassigned: number
+  active: number
+  converted_5v_7d: number
+  converted_5v_14d: number
+  paid: number
+  status: string
+  reasons: string[]
+  main_problem: string
+  suggested_action: string
+  owner: string
+  is_blocking: boolean
+}
+
+export interface BlockedCohortsResponse {
+  total_blocked_or_warning: number
+  blocking_count: number
+  warning_count: number
+  cohorts: BlockedCohortItem[]
+}
+
+export async function getAlertsDetail(): Promise<AlertsDetailResponse> {
+  const { data } = await api.get('/health/alerts/detail')
+  return data
+}
+
+export async function getUnassignedDrivers(limit?: number, offset?: number): Promise<UnassignedDriversResponse> {
+  const { data } = await api.get('/health/unassigned-drivers', { params: { limit, offset } })
+  return data
+}
+
+export async function getBlockedCohorts(): Promise<BlockedCohortsResponse> {
+  const { data } = await api.get('/health/cohorts-blocked')
+  return data
+}
+
+// ── Operational Readiness ──
+
+export async function getOperationalReadiness(): Promise<OperationalReadiness> {
+  const { data } = await api.get('/health/summary')
+  return data.operational_readiness
+}
+
+// ── CSV Downloads ──
+
+export function getUnassignedDriversCsvUrl(): string {
+  return `${api.defaults.baseURL}/health/unassigned-drivers.csv`
+}
+
+export function getBlockedCohortsCsvUrl(): string {
+  return `${api.defaults.baseURL}/health/cohorts-blocked.csv`
+}
+
+export function getAlertsCsvUrl(): string {
+  return `${api.defaults.baseURL}/health/alerts.csv`
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PAYMENT FLOW: Flujo completo de pagos
 // ═══════════════════════════════════════════════════════════════════════════
 

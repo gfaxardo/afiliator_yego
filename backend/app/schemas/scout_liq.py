@@ -1155,3 +1155,150 @@ class OperationalGapsDiagnosticResponse(BaseModel):
     gap_rate_pct: float = 0.0
     note: str = "Este numero requiere diagnostico por ventana/origen antes de interpretarse como perdida real."
     breakdown: List[OperationalGapsDiagnosticBreakdown] = []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HEALTH PIPELINE — Auditoria completa de frescura y derivados
+# ═══════════════════════════════════════════════════════════════════════════
+
+class PipelineSourceInfo(BaseModel):
+    status: str = "ok"
+    max_hire_date: Optional[str] = None
+    max_anchor_date: Optional[str] = None
+    anchor_date_source: Optional[str] = None
+    lag_days: Optional[int] = None
+    rows_last_1d: int = 0
+    rows_last_3d: int = 0
+    rows_last_7d: int = 0
+    total_rows: int = 0
+    message: str = ""
+    recommended_action: Optional[str] = None
+    anchor_warnings: Optional[List[str]] = None
+    last_source_update: Optional[str] = None
+    cabinet_leads_last_1d: Optional[int] = None
+    fleet_leads_last_1d: Optional[int] = None
+
+
+class PipelineDerivedInfo(BaseModel):
+    status: str = "ok"
+    last_recomputed_at: Optional[str] = None
+    recompute_lag_days: Optional[int] = None
+    stale_dependencies: List[str] = []
+    message: str = ""
+    recommended_action: Optional[str] = None
+
+
+class PipelineMatchingInfo(BaseModel):
+    status: str = "ok"
+    unmatched_count: int = 0
+    total_source_drivers: int = 0
+    assigned_count: int = 0
+    assignment_coverage_pct: float = 0.0
+    unassigned_sample: List[dict] = []
+    message: str = ""
+    recommended_action: Optional[str] = None
+
+
+class PipelineCohortItem(BaseModel):
+    cohort: str = ""
+    cohort_key: str = ""
+    range: str = ""
+    total: int = 0
+    assigned: int = 0
+    unassigned: int = 0
+    active: int = 0
+    converted_5v_7d: int = 0
+    converted_5v_14d: int = 0
+    paid: int = 0
+    is_7d_mature: bool = False
+    is_14d_mature: bool = False
+    cutoff_exists: bool = False
+    cutoff_status: Optional[str] = None
+    status: str = "ok"
+    reasons: List[str] = []
+
+
+class PipelineCohortsSummary(BaseModel):
+    global_status: str = "ok"
+    warning_count: int = 0
+    blocked_count: int = 0
+    total_cohorts: int = 0
+
+
+class PipelineJobRun(BaseModel):
+    job_name: str = ""
+    status: str = ""
+    finished_at: Optional[str] = None
+    duration_ms: Optional[int] = None
+    error_message: Optional[str] = None
+    started_at: Optional[str] = None
+
+
+class PipelineMissingJob(BaseModel):
+    job_name: str = ""
+    description: str = ""
+    recommended_action: Optional[str] = None
+
+
+class PipelineJobsInfo(BaseModel):
+    status: str = "ok"
+    last_successful_runs: List[PipelineJobRun] = []
+    failed_runs: List[PipelineJobRun] = []
+    missing_jobs: List[PipelineMissingJob] = []
+
+
+class PipelineAlert(BaseModel):
+    code: str = ""
+    severity: str = "warning"
+    message: str = ""
+    root_cause_candidate: Optional[str] = None
+    recommended_action: Optional[str] = None
+
+
+class PipelineSummaryResponse(BaseModel):
+    evaluated_at: str = ""
+    overall_status: str = "ok"
+    closed_day_expected: Optional[str] = None
+    source_operational: PipelineSourceInfo = PipelineSourceInfo()
+    derived_pipeline: PipelineDerivedInfo = PipelineDerivedInfo()
+    matching: PipelineMatchingInfo = PipelineMatchingInfo()
+    cohorts: List[PipelineCohortItem] = []
+    cohorts_summary: PipelineCohortsSummary = PipelineCohortsSummary()
+    jobs: PipelineJobsInfo = PipelineJobsInfo()
+    alerts: List[PipelineAlert] = []
+
+
+class RecomputeStep(BaseModel):
+    name: str = ""
+    status: str = "ok"
+    message: Optional[str] = None
+    rows_checked: Optional[int] = None
+    lag_days: Optional[int] = None
+    total: Optional[int] = None
+    assigned: Optional[int] = None
+    coverage_pct: Optional[float] = None
+    cohorts_evaluated: Optional[int] = None
+    warning_count: Optional[int] = None
+    blocked_count: Optional[int] = None
+    registry_entries: Optional[int] = None
+    new_events: Optional[int] = None
+    resolved_events: Optional[int] = None
+    unmatched_count: Optional[int] = None
+    sample_size: Optional[int] = None
+
+
+class RecomputeHealthSummary(BaseModel):
+    overall_status: Optional[str] = None
+    source_status: Optional[str] = None
+    matching_status: Optional[str] = None
+    cohorts_status: Optional[str] = None
+
+
+class RecomputeDerivedResponse(BaseModel):
+    status: str = "ok"
+    started_at: str = ""
+    finished_at: str = ""
+    duration_ms: int = 0
+    steps: List[RecomputeStep] = []
+    alerts: List[PipelineAlert] = []
+    health_summary: RecomputeHealthSummary = RecomputeHealthSummary()
