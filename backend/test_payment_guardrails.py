@@ -19,7 +19,7 @@ class TestPaymentAnchorStatus:
     def test_cabinet_official_strong(self):
         """Cabinet con lead_created_at oficial = official_strong + auto-payable."""
         row = {"driver_id": "c1", "origen": "cabinet",
-               "lead_created_at": "2026-03-01T10:00:00",
+               "lead_created_at_cabinet": "2026-03-01T10:00:00",
                "hire_date": "2026-03-01", "created_at": None}
         result = resolve_acquisition_anchor(row)
         pay = resolve_payment_anchor_status(result)
@@ -111,7 +111,7 @@ class TestPaymentGuardrailIntegration:
     def test_cabinet_new_driver_auto_payable(self):
         """Driver cabinet nuevo con LCA = official_strong, auto-payable."""
         row = {"driver_id": "n1", "origen": "cabinet",
-               "lead_created_at": "2026-01-15T10:00:00",
+               "lead_created_at_cabinet": "2026-01-15T10:00:00",
                "hire_date": "2026-01-15", "created_at": None}
         result = resolve_acquisition_anchor(row)
         pay = resolve_payment_anchor_status(result)
@@ -122,7 +122,7 @@ class TestPaymentGuardrailIntegration:
     def test_cabinet_reactivated_still_auto_payable(self):
         """Reactivado con LCA sigue siendo auto-payable (tiene LCA oficial)."""
         row = {"driver_id": "r2", "origen": "cabinet",
-               "lead_created_at": "2026-04-01T10:00:00",
+               "lead_created_at_cabinet": "2026-04-01T10:00:00",
                "hire_date": "2025-09-01", "created_at": None}
         result = resolve_acquisition_anchor(row)
         pay = resolve_payment_anchor_status(result)

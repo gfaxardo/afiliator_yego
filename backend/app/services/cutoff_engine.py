@@ -223,10 +223,8 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     # Hire date filter: only for COHORT mode, not for PAYABLE_SWEEP
     if run.cutoff_mode != "PAYABLE_SWEEP" and run.hire_date_from and run.hire_date_to:
         assignments = assignments.filter(
-            DriverAssignment.hire_date.is_(None) | (
-                (DriverAssignment.hire_date >= run.hire_date_from)
-                & (DriverAssignment.hire_date <= run.hire_date_to)
-            ),
+            DriverAssignment.hire_date >= run.hire_date_from,
+            DriverAssignment.hire_date <= run.hire_date_to,
         )
     if run.origin_filter:
         assignments = assignments.filter(DriverAssignment.origin == run.origin_filter)
@@ -237,13 +235,13 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
     if not all_driver_ids:
         return {"status": "no_assignments", "message": "No hay asignaciones activas en la ventana"}
 
-    if len(all_driver_ids) > 500:
+    if len(all_driver_ids) > 5000:
         return {
             "status": "cutoff_too_large",
             "code": "cutoff_too_large",
-            "message": f"Demasiados conductores ({len(all_driver_ids)}). Maximo 500. Reduce la ventana o usa procesamiento batch.",
+            "message": f"Demasiados conductores ({len(all_driver_ids)}). Maximo 5000. Reduce la ventana o usa procesamiento batch.",
             "driver_count": len(all_driver_ids),
-            "max_allowed": 500,
+            "max_allowed": 5000,
         }
 
     trip_counts = compute_trip_counts_batch(db, all_driver_ids)
@@ -601,6 +599,7 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
             summary_status="ok",
         )
         db.add(summary)
+        group["summary"] = summary
 
         # Update line statuses with proper lifecycle states
         for l in lines:
@@ -810,6 +809,21 @@ def calculate_cutoff(db: Session, cutoff_run_id: int) -> Dict[str, Any]:
                     + f" [BLOQUEADO: {l.blocked_reason}]"
                 )
                 anchor_blocks += 1
+
+    # ── Recalculate summary amounts based on actual payable lines ──
+    for sid, g in scout_groups.items():
+        summary = g.get("summary")
+        if not summary:
+            continue
+        eligible_lines = [l for l in g["lines"] if l.payout_eligible_flag and l.line_status == "payable"]
+        if eligible_lines:
+            summary.total_payable = summary.amount_calculated
+        else:
+            summary.total_payable = Decimal("0")
+            summary.amount_calculated = Decimal("0")
+            summary.status = "blocked"
+            if not summary.blocked_reason:
+                summary.blocked_reason = "Todos los drivers bloqueados (anchor, ya pagado, o sin volumen)"
 
     run.status = "calculated"
     run.conversion_metric_status = "ok"
