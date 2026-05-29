@@ -210,6 +210,8 @@ SHEETS = {
             ("cutoff_external_id", False),
             ("assignment_date", False),
             ("hire_date", False),
+            ("fecha_atribucion", False),
+            ("tipo_evento", False),
             ("scout_name_raw", True),
             ("supervisor_name_raw", False),
             ("scout_type_raw", False),
@@ -230,6 +232,7 @@ SHEETS = {
         "example": [
             "ATTR-001", "import.xlsx", "Registros-conductores", "1",
             "CORTE-2024-01", "2024-01-15", "2024-01-01",
+            "2024-01-01", "new",
             "JUAN PEREZ", "MARIA GOMEZ", "cabinet", "app",
             "Q12345678", "Carlos Lopez", "999888777", "",
             "PAGADO", "50.00", "conexion",

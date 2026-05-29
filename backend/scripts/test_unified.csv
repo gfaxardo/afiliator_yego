@@ -1,5 +1,5 @@
-licencia,scout,supervisor,pagado,monto_pagado,fecha_pago,observacion,driver_id,nombre_conductor,origen,tipo_scout,motivo_pago,cohorte_iso
-Q45406817,Scout Unificado,Juan Supervisor,SI,150.00,2026-01-15,Pago enero,,Geovani Aedo,cabinet,destajo,Conversion 40%,2026-W03
-Q99999999,Scout Nuevo,Maria Super,SI,200.00,2026-02-01,Pago febrero,,,,fleet,destajo,,
-Q12345678,Scout Unificado,Carlos Super,NO,0,2026-03-01,Solo atribucion,,Nuevo Conductor,cabinet,,,
-,DRIVER_DIRECTO,Ana Super,SI,300.00,2026-04-01,Pago directo,SOME_DRIVER_ID,,,,,
+licencia,scout,supervisor,pagado,monto_pagado,fecha_pago,fecha_atribucion,tipo_evento,observacion,driver_id,nombre_conductor,origen,tipo_scout,motivo_pago,cohorte_iso
+Q45406817,Scout Unificado,Juan Supervisor,SI,150.00,2026-01-15,2026-01-10,new,Pago enero,,Geovani Aedo,cabinet,destajo,Conversion 40%,2026-W03
+Q99999999,Scout Nuevo,Maria Super,SI,200.00,2026-02-01,2026-01-20,new,Pago febrero,,,,fleet,destajo,,
+Q12345678,Scout Unificado,Carlos Super,NO,0,2026-03-01,,,Solo atribucion,,Nuevo Conductor,cabinet,,,
+,DRIVER_DIRECTO,Ana Super,SI,300.00,2026-04-01,2026-03-15,reactivated,Pago directo,SOME_DRIVER_ID,,,,,

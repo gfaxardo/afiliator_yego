@@ -1,0 +1,7 @@
+id,driver_id,cohort_iso_week,scout_id_before,scout_id_after,override_type,amount,currency,reason,notes,created_by,created_at,approved_by,approved_at,status,blocks_future_payment,paid_history_id,metadata_json
+1,7d20234cbe5742e0a64ff30c30da8326,,,,force_exclude,,PEN,Driver en revision por fraude,,,2026-05-20 08:59:46.610681,,2026-05-20 08:59:47.820482,applied,True,,
+2,00198846ab624d79bf756c5baff602b5,,,,force_pay,30.00,PEN,Pago excepcional autorizado por supervisor,Aprobado por gerencia,,2026-05-20 08:59:52.022536,,2026-05-20 08:59:53.373633,applied,True,1270,
+3,cbcda963d2634a3799de6dccc60c92aa,,,1,assign_scout,,PEN,Asignacion manual a Test Scout para validacion,QA - Caso A,,2026-05-20 09:11:47.439498,,2026-05-20 09:11:48.815609,applied,False,,
+4,cbcda963d2634a3799de6dccc60c92aa,,,1,assign_scout,,PEN,QA Caso A - asignacion manual,Test QA,,2026-05-20 09:12:24.729310,,2026-05-20 09:12:26.303193,approved,False,,
+5,d7397af3380f491b97597e4c29c70524,,,1,assign_scout,,PEN,QA Caso A - asignacion manual,Test QA,,2026-05-20 09:13:29.810701,,2026-05-20 09:13:31.563554,applied,False,,
+6,00198846ab624d79bf756c5baff602b5,,1,2,reassign_scout,,PEN,QA Caso B - reasignacion,Test QA,,2026-05-20 09:14:35.440914,,2026-05-20 09:14:37.928556,applied,False,,

@@ -8,7 +8,7 @@ from app.services.unified_load_service import unified_preview, _parse_rows_from_
 db = SessionLocal()
 try:
     csv_text = open(os.path.join(os.path.dirname(__file__), 'test_unified.csv'), encoding='utf-8-sig').read()
-    rows, errors = _parse_rows_from_csv(csv_text)
+    rows, errors, _ = _parse_rows_from_csv(csv_text)
     print(f"Parsed {len(rows)} rows, {len(errors)} errors")
 
     result = unified_preview(db, rows)

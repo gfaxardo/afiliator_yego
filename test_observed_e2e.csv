@@ -1,0 +1,9 @@
+﻿fecha_afiliacion,origen,scout,supervisor,nombre_driver,licencia,telefono,test_batch
+2026-05-15,cabinet,Guillen Jose,Sup Test,Driver Real 1,D41625241,+51986791668,QA_OBSERVED_E2E_20260523_1043
+2026-05-16,cabinet,Masis Jafeth,Sup Test,Driver Real 2,D74981311,+51953133254,QA_OBSERVED_E2E_20260523_1043
+2026-05-17,fleet,Morales Esmeralda,Sup Test,No Match Driver,ZZZ999NOMATCH,0000000001,QA_OBSERVED_E2E_20260523_1043
+2026-05-17,cabinet,Morales Esmeralda,Sup Test 2,Dup Claim Driver,D41625241,+51986791668,QA_OBSERVED_E2E_20260523_1043
+2026-05-18,cabinet,Guillen Jose,Sup Test 3,Real Driver 3,D24009345,+51981003408,QA_OBSERVED_E2E_20260523_1043
+2026-05-18,fleet,Morales Esmeralda,Sup Test 4,Bad Phone,TEST-BAD-002,123,QA_OBSERVED_E2E_20260523_1043
+2026-05-19,cabinet,Masis Jafeth,Sup Test 5,Real Driver 4,D79655822,+51906381229,QA_OBSERVED_E2E_20260523_1043
+2026-05-19,fleet,Masis Jafeth,Sup Test 6,Real Fleet Driver,41359877,+51973605048,QA_OBSERVED_E2E_20260523_1043

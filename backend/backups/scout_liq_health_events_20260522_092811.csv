@@ -1,0 +1,5 @@
+id,event_type,severity,source_name,cohort_key,title,message,status,detected_at,resolved_at,metadata_json
+1,source_lag_blocked,BLOCKED,module_ct_cabinet_drivers,,Fuente operativa atrasada 6 dias,Fuente atrasada 6 dias; Sin nuevos drivers en el ultimo dia,open,2026-05-21 14:32:54.483253,,
+3,cohort_stale,WARNING,cohort,2026-W13,Cohorte S13-2026 madura sin cutoff,Existen 54 drivers sin scout; Cohorte madura sin cutoff creado,open,2026-05-21 14:32:54.483253,,
+4,high_unassigned_drivers,WARNING,scout_assignments,,969 drivers sin scout (53%),969 drivers sin scout asignado; Cobertura de scouts baja: 47.1%,open,2026-05-21 17:54:28.294653,,
+2,scout_load_stale,WARNING,scout_assignments,,Sin carga de scouts reciente (7d),No se pudo evaluar la carga de scouts,resolved,2026-05-21 14:32:54.483253,2026-05-21 22:54:43.923338,

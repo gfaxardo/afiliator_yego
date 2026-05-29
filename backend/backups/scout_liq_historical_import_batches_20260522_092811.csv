@@ -1,0 +1,21 @@
+id,upload_batch_id,source_file,uploaded_by,uploaded_at,status,total_rows,imported_count,rejected_count,manual_review_count,duplicate_count,amount_imported,notes,created_at
+1,,test.xlsx,,2026-05-17 11:10:50.478052,previewing,4,0,0,0,0,0.00,,2026-05-17 11:10:50.478052
+2,,test2.xlsx,test,2026-05-17 11:15:56.979346,completed,1,1,0,0,0,150.00,,2026-05-17 11:15:56.979346
+3,,test2.xlsx,,2026-05-17 11:16:03.472971,previewing,1,0,0,0,0,0.00,,2026-05-17 11:16:03.472971
+4,,Plantilla_AFILIATOR_Carga_Historica_Esquemas_Manual PRUEBA 1.xlsx,,2026-05-17 14:30:11.059555,previewing,49,0,0,0,0,0.00,,2026-05-17 14:30:11.059555
+5,,test.xlsx,,2026-05-17 21:08:54.783586,previewing,1,0,0,0,0,0.00,,2026-05-17 21:08:54.783586
+6,,prueba1.xlsx,,2026-05-17 21:30:50.846173,previewing,1551,0,0,0,0,0.00,,2026-05-17 21:30:50.846173
+7,,Plantilla_AFILIATOR_Carga_Historica_Esquemas_Manual PRUEBA 1.xlsx,,2026-05-17 21:36:30.643957,previewing,1551,0,0,0,0,0.00,,2026-05-17 21:36:30.643957
+8,,prueba1.xlsx,,2026-05-17 23:56:20.740151,previewing,1551,0,0,0,0,0.00,,2026-05-17 23:56:20.740151
+9,,p.xlsx,,2026-05-17 23:57:04.249408,previewing,1551,0,0,0,0,0.00,,2026-05-17 23:57:04.249408
+10,,test.xlsx,,2026-05-18 13:32:07.318266,previewing,5,0,0,0,0,0.00,,2026-05-18 13:32:07.318266
+11,,prueba1.xlsx,,2026-05-18 13:29:20.122755,previewing,1551,0,0,0,0,0.00,,2026-05-18 13:29:20.122755
+12,,prueba1.xlsx,,2026-05-18 14:21:40.933733,previewing,1551,0,0,0,0,0.00,,2026-05-18 14:21:40.933733
+13,,Plantilla_AFILIATOR_Carga_Historica_Esquemas_Manual PRUEBA 1.xlsx,,2026-05-18 14:25:52.170137,previewing,1551,0,0,0,0,0.00,,2026-05-18 14:25:52.170137
+14,,p.xlsx,,2026-05-18 15:06:21.815867,previewing,1551,0,0,0,0,0.00,,2026-05-18 15:06:21.815867
+15,,Plantilla_AFILIATOR_Carga_Historica_Esquemas_Manual PRUEBA 1.xlsx,,2026-05-18 15:17:38.933594,completed,1551,0,0,0,0,0.00,,2026-05-18 15:17:38.933594
+16,,p.xlsx,,2026-05-18 15:43:30.353441,previewing,1551,0,0,0,0,0.00,,2026-05-18 15:43:30.353441
+17,,p.xlsx,audit,2026-05-18 16:09:37.019099,previewing,1551,0,0,0,0,0.00,,2026-05-18 16:09:37.019099
+18,,p.xlsx,,2026-05-18 16:42:58.353263,previewing,1551,0,0,0,0,0.00,,2026-05-18 16:42:58.353263
+19,,p.xlsx,,2026-05-18 16:45:01.129172,previewing,1551,0,0,0,0,0.00,,2026-05-18 16:45:01.129172
+20,,Plantilla_AFILIATOR_Carga_Historica_Esquemas_Manual PRUEBA 1.xlsx,,2026-05-18 18:16:33.058563,completed,1551,245,0,783,0,6735.00,,2026-05-18 18:16:33.058563

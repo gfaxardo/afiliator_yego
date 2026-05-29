@@ -1986,7 +1986,7 @@ export async function getAlertsDetail(): Promise<AlertsDetailResponse> {
   return data
 }
 
-export async function getUnassignedDrivers(limit?: number, offset?: number): Promise<UnassignedDriversResponse> {
+export async function getHealthUnassignedDrivers(limit?: number, offset?: number): Promise<UnassignedDriversResponse> {
   const { data } = await api.get('/health/unassigned-drivers', { params: { limit, offset } })
   return data
 }

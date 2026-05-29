@@ -3,7 +3,7 @@ import {
   getHealthPipeline,
   recomputeDerived,
   getAlertsDetail,
-  getUnassignedDrivers,
+  getHealthUnassignedDrivers,
   getBlockedCohorts,
   getUnassignedDriversCsvUrl,
   getBlockedCohortsCsvUrl,
@@ -48,7 +48,7 @@ export default function HealthDashboardView() {
 
   const pipeline = usePanel(() => getHealthPipeline(), [])
   const alertsDetail = usePanel(() => getAlertsDetail(), [])
-  const unassigned = usePanel(() => showUnassigned ? getUnassignedDrivers(20, 0) : Promise.resolve(null), [showUnassigned])
+  const unassigned = usePanel(() => showUnassigned ? getHealthUnassignedDrivers(20, 0) : Promise.resolve(null), [showUnassigned])
   const blockedCohorts = usePanel(() => showBlockedCohorts ? getBlockedCohorts() : Promise.resolve(null), [showBlockedCohorts])
 
   const handleRecompute = useCallback(async () => {

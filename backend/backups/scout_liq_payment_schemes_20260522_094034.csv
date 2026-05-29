@@ -1,0 +1,3 @@
+id,name,scheme_type,description,is_active,created_at,updated_at
+1,Cabinet Standard,cabinet,Esquema base para scouts cabinet. Activacion: 1 viaje en 7 dias. Calidad: 5 viajes en 7 dias. Pago: activados x tier.,True,2026-05-20 00:14:31.437009,2026-05-20 00:14:31.437009
+2,Fleet Standard,fleet,Esquema base para scouts fleet. Activacion: 50 viajes en 30 dias. Calidad: 50 viajes en 30 dias. Pago: calidad x fijo.,True,2026-05-20 00:14:32.929996,2026-05-20 00:14:32.929996

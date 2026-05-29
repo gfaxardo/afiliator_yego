@@ -1,0 +1,11 @@
+licencia,scout,supervisor,pagado,monto_pagado,fecha_pago,fecha_atribucion,tipo_evento,observacion,driver_id,nombre_conductor,origen,tipo_scout,motivo_pago,cohorte_iso
+Q10200483,Masis Jafeth,Juan Supervisor,NO,0,,2026-05-23,new,Caso 1: cabinet/new con fecha_atribucion,,Conductor Nuevo A,cabinet,destajo,,
+Q07965562,Guillen Jose,Maria Super,NO,0,,2026-05-20,reactivated,Caso 2: cabinet/reactivated con fecha_atribucion,,Conductor Nuevo B,cabinet,destajo,,
+Q70087730,Morales Esmeralda,Carlos Super,NO,0,,2026-05-15,migrated,Caso 3: fleet/migrated con fecha_atribucion,,Conductor Nuevo C,fleet,destajo,,
+Q76636893,Morales Esmeralda,Supervisor X,NO,0,,,,Caso 4: cabinet con fecha_atribucion vacia (warning esperado),,Conductor Sin Fecha,cabinet,destajo,,
+Q10200483,Masis Jafeth,Juan Supervisor,SI,200.00,2026-04-15,2026-04-10,new,Caso 5: pago historico con fecha_atribucion y fecha_pago,,Conductor Pagado A,cabinet,destajo,Pago abril,2026-W16
+Q99999999,Guillen Jose,Test Super,NO,0,,2026-05-01,new,Caso 6: driver no encontrado,,Driver Inexistente,fleet,destajo,,
+,Morales Esmeralda,Test Super,NO,0,,,,Caso 7: sin licencia (error requerido),,,cabinet,,,
+Q47447160,Lizcano Maria Beatriz,Ana Super,NO,0,,2026-05-22,new,Caso 8: cabinet/new con fecha_atribucion,,Conductor Adicional,cabinet,destajo,,
+Q008756281,Rodriguez Yenker Javier,Jorge Super,NO,0,,2026-05-18,migrated,Caso 9: cabinet/migrated con fecha_atribucion,,Conductor Migrado,cabinet,destajo,,
+Q70087730,Morales Esmeralda,Carlos Super,SI,150.00,2026-05-01,2026-05-01,new,Caso 10: pago operativo con ambas fechas,,Conductor Pagado B,fleet,destajo,Conversion,,
